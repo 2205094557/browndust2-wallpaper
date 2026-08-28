@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.pyc
+resources/*
+!resources/icon.ico
+logs/
+dist/
+build/
+*.spec
+!azurlane.spec
+node_modules/
+frontend/dist/
+references/
+.vite/
+.cursor/
+*.log
+# 语音解码器（vgmstream 二进制，10MB+）：与 references/ 同策略，
+# 本地机器工具不入库，由 build_pack.py 自检保证打包版存在
+tools/vgmstream/
+_debug_frames/
+_tmp_*.txt
+# 无头验证产物（截图/服务目录）与本地探针数据，不入库
+tools/_spine41_shots/
+tools/_idle2_probe/

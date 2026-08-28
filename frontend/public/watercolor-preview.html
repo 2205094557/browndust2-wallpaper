@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>水彩画风 · 主题预览</title>
+<style>
+  :root {
+    --paper: #faf8f5;
+    --paper-2: #f0ebe3;
+    --blue: #4a6fa5;
+    --rose: #b4788c;
+    --green: #78a082;
+    --gold: #c9a84c;
+    --ink: #3a3a3a;
+    --muted: #8a8a8a;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  /* 水彩晕染背景 */
+  .bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background:
+      radial-gradient(38% 32% at 12% 18%, rgba(74,111,165,.16), transparent 65%),
+      radial-gradient(30% 28% at 88% 12%, rgba(180,120,140,.14), transparent 65%),
+      radial-gradient(34% 30% at 82% 78%, rgba(120,160,130,.14), transparent 65%),
+      radial-gradient(28% 26% at 16% 84%, rgba(201,168,76,.13), transparent 65%),
+      var(--paper);
+  }
+  .grain { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .5; mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E"); }
+  .page { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 40px 28px 60px; }
+  /* 导航 */
+  .nav { display: flex; align-items: center; justify-content: space-between; padding-bottom: 30px; border-bottom: 1px solid rgba(74,111,165,.18); }
+  .logo { font-size: 20px; letter-spacing: 2px; color: var(--blue); }
+  .nav-links { display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+  .nav-links span { cursor: pointer; transition: color .3s; }
+  .nav-links span:hover { color: var(--blue); }
+  /* 标题区 */
+  .head { padding: 36px 0 26px; }
+  .head h1 { font-weight: 300; font-size: 30px; letter-spacing: 3px; }
+  .head p { font-family: system-ui, sans-serif; font-weight: 300; font-size: 14px; color: var(--muted); margin-top: 10px; }
+  .head .tag { display: inline-block; margin-top: 14px; padding: 6px 16px; border-radius: 999px; font-size: 12px; color: var(--blue); background: rgba(74,111,165,.12); }
+  /* 卡片网格 */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 22px; }
+  .card {
+    background: rgba(250,248,245,.9);
+    border: 1px solid rgba(74,111,165,.2);
+    border-radius: 24px;
+    box-shadow: 0 4px 20px rgba(74,111,165,.12);
+    overflow: hidden;
+    transition: all .4s ease-out;
+  }
+  .card:hover { transform: scale(1.02); box-shadow: 0 8px 30px rgba(74,111,165,.2); }
+  .card:active { transform: scale(.98); }
+  .cover { position: relative; height: 150px; overflow: hidden; }
+  .cover .wash { position: absolute; inset: 0; }
+  .cover .blob { position: absolute; border-radius: 50%; filter: blur(18px); }
+  .cover .name { position: absolute; left: 18px; bottom: 12px; font-size: 22px; font-weight: 300; letter-spacing: 3px; color: rgba(58,58,58,.85); text-shadow: 0 1px 8px rgba(250,248,245,.7); }
+  .body { padding: 14px 16px 16px; font-family: system-ui, sans-serif; }
+  .row1 { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .row1 .en { font-size: 12px; color: var(--muted); }
+  .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pill { font-size: 11px; padding: 3px 10px; border-radius: 999px; }
+  .pill.blue { color: var(--blue); background: rgba(74,111,165,.13); }
+  .pill.rose { color: #9c5f74; background: rgba(180,120,140,.15); }
+  .pill.green { color: #5f8069; background: rgba(120,160,130,.16); }
+  .pill.gold { color: #9a7c2e; background: rgba(201,168,76,.18); }
+  .count { font-size: 12px; color: var(--muted); }
+  /* 控件示例 */
+  .controls { margin-top: 34px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .btn {
+    font-family: system-ui, sans-serif; font-weight: 300; font-size: 14px;
+    border: none; border-radius: 16px; padding: 10px 22px; cursor: pointer;
+    background: rgba(74,111,165,.8); color: #fff;
+    box-shadow: 0 4px 20px rgba(74,111,165,.12);
+    transition: all .4s ease-out;
+  }
+  .btn:hover { transform: scale(1.02); }
+  .btn:active { transform: scale(.98); }
+  .btn.ghost { background: var(--paper); color: var(--blue); border: 1px solid rgba(74,111,165,.3); }
+  .input {
+    font-family: system-ui, sans-serif; font-weight: 300; font-size: 14px;
+    border: 1px solid rgba(74,111,165,.2); border-radius: 16px; background: rgba(255,255,255,.6);
+    padding: 10px 16px; outline: none; color: var(--ink); width: 240px;
+    transition: box-shadow .3s;
+  }
+  .input:focus { box-shadow: 0 4px 20px rgba(74,111,165,.15); }
+  .foot { margin-top: 44px; padding-top: 22px; border-top: 1px solid rgba(74,111,165,.18); color: var(--blue); font-size: 13px; letter-spacing: 1px; }
+  .foot small { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; font-family: system-ui, sans-serif; }
+  @media (prefers-reduced-motion: reduce) {
+    .card, .btn { transition: none; }
+    .card:hover { transform: none; }
+  }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="grain"></div>
+<div class="page">
+  <nav class="nav">
+    <div class="logo">棕色尘埃2 · 壁纸工坊</div>
+    <div class="nav-links"><span>角色图鉴</span><span>设置</span><span>关于</span></div>
+  </nav>
+
+  <div class="head">
+    <h1>角色图鉴</h1>
+    <p>水彩画风主题预览 · 109 位角色 · 466 个皮肤</p>
+    <span class="tag">主题预览 · 水彩画风</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="cover">
+        <div class="wash" style="background: linear-gradient(150deg, rgba(74,111,165,.45), rgba(180,120,140,.35), rgba(250,248,245,.4));"></div>
+        <div class="blob" style="width:110px;height:110px;left:8%;top:8%;background:rgba(74,111,165,.35);"></div>
+        <div class="blob" style="width:90px;height:90px;right:10%;bottom:-12%;background:rgba(180,120,140,.35);"></div>
+        <span class="name">阿尔萨斯</span>
+      </div>
+      <div class="body">
+        <div class="row1"><span>自由鸢尾</span><span class="en">Alsace</span></div>
+        <div class="pills">
+          <span class="pill blue">战列</span>
+          <span class="pill rose">海上传奇</span>
+          <span class="pill green">Spine</span>
+          <span class="pill gold">L2D</span>
+          <span class="count">3 皮肤</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="cover">
+        <div class="wash" style="background: linear-gradient(150deg, rgba(120,160,130,.5), rgba(201,168,76,.35), rgba(250,248,245,.4));"></div>
+        <div class="blob" style="width:100px;height:100px;right:12%;top:10%;background:rgba(120,160,130,.4);"></div>
+        <div class="blob" style="width:80px;height:80px;left:6%;bottom:-10%;background:rgba(201,168,76,.4);"></div>
+        <span class="name">奇尔沙治</span>
+      </div>
+      <div class="body">
+        <div class="row1"><span>自由鸢尾</span><span class="en">Kearsarge</span></div>
+        <div class="pills">
+          <span class="pill blue">战列</span>
+          <span class="pill rose">海上传奇</span>
+          <span class="pill green">Spine</span>
+          <span class="pill gold">L2D</span>
+          <span class="count">3 皮肤</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="cover">
+        <div class="wash" style="background: linear-gradient(150deg, rgba(180,120,140,.5), rgba(74,111,165,.3), rgba(250,248,245,.4));"></div>
+        <div class="blob" style="width:110px;height:110px;left:10%;top:6%;background:rgba(180,120,140,.4);"></div>
+        <div class="blob" style="width:85px;height:85px;right:8%;bottom:-8%;background:rgba(74,111,165,.32);"></div>
+        <span class="name">信浓</span>
+      </div>
+      <div class="body">
+        <div class="row1"><span>重樱</span><span class="en">Shinano</span></div>
+        <div class="pills">
+          <span class="pill blue">航母</span>
+          <span class="pill rose">海上传奇</span>
+          <span class="pill green">Spine</span>
+          <span class="pill gold">L2D</span>
+          <span class="count">6 皮肤</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="cover">
+        <div class="wash" style="background: linear-gradient(150deg, rgba(201,168,76,.45), rgba(120,160,130,.35), rgba(250,248,245,.4));"></div>
+        <div class="blob" style="width:95px;height:95px;right:14%;top:8%;background:rgba(201,168,76,.4);"></div>
+        <div class="blob" style="width:90px;height:90px;left:4%;bottom:-12%;background:rgba(120,160,130,.38);"></div>
+        <span class="name">俾斯麦</span>
+      </div>
+      <div class="body">
+        <div class="row1"><span>铁血</span><span class="en">Bismarck</span></div>
+        <div class="pills">
+          <span class="pill blue">战列</span>
+          <span class="pill rose">超稀有</span>
+          <span class="pill green">Spine</span>
+          <span class="pill gold">L2D</span>
+          <span class="count">5 皮肤</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="btn">同步资源清单</button>
+    <button class="btn ghost">导出壁纸</button>
+    <input class="input" placeholder="搜索角色名…">
+  </div>
+
+  <footer class="foot">
+    棕色尘埃2 · 壁纸工坊工具
+    <small>水彩画风主题预览 —— 柔和晕染 · 纸张质感 · 衬线细字（仅供主题评估，尚未应用到软件）</small>
+  </footer>
+</div>
+</body>
+</html>

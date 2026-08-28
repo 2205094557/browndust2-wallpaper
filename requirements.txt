@@ -1,0 +1,7 @@
+pywebview>=5.0
+UnityPy>=1.10
+Pillow>=10.0
+requests>=2.31
+protobuf>=4.25
+# 拼音检索（build_local_index / 前端中文搜索）
+pypinyin>=0.49

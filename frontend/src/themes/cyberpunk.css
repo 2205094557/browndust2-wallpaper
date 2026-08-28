@@ -1,0 +1,718 @@
+/* =========================================================
+   赛博朋克霓虹主题（Cyberpunk Neon）— body.theme-cyberpunk 覆盖层
+   深色主导 #0a0a0f · 青色霓虹发光 · 高饱和青/品红/黄 ·
+   网格扫描线 · 等宽字体 · 小圆角 rounded-lg
+   覆盖：全局背景 / wc-btn 按钮体系 / 卡片 / 筛选胶囊 /
+   分段控件 / 开关行 / 图标按钮 / L2D 面板 / Naive 组件
+   ========================================================= */
+
+body.theme-cyberpunk {
+  --paper: #0a0a0f;
+  --paper-2: #0d0d15;
+  --blue: #22d3ee;
+  --cyan: #22d3ee;
+  --rose: #e879f9;
+  --green: #4ade80;
+  --gold: #facc15;
+  --ink: #f3f4f6;
+  --muted: #cbd5e1;
+  --line: rgba(34, 211, 238, 0.3);
+  --shadow-soft: 0 0 10px rgba(0, 255, 255, 0.3);
+  --shadow-hover: 0 0 30px rgba(0, 255, 255, 0.6);
+  --font-serif: "Consolas", "Courier New", "PingFang SC", "Microsoft YaHei", monospace;
+  --font-sans: "Consolas", "JetBrains Mono", "PingFang SC", "Microsoft YaHei", monospace;
+}
+
+body.theme-cyberpunk {
+  background: #0a0a0f;
+  color: #e5e7eb;
+}
+
+/* 全局背景：近黑 + 网格线 + 扫描线 */
+body.theme-cyberpunk .watercolor-bg {
+  background:
+    radial-gradient(45% 40% at 12% 15%, rgba(34, 211, 238, 0.1), transparent 65%),
+    radial-gradient(35% 32% at 88% 12%, rgba(232, 121, 249, 0.09), transparent 65%),
+    radial-gradient(32% 30% at 80% 82%, rgba(250, 204, 21, 0.06), transparent 65%),
+    linear-gradient(rgba(34, 211, 238, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 211, 238, 0.05) 1px, transparent 1px),
+    #0a0a0f;
+  background-size: auto, auto, auto, 42px 42px, 42px 42px, auto;
+}
+body.theme-cyberpunk .watercolor-grain {
+  background-image:
+    repeating-linear-gradient(0deg, rgba(0, 255, 255, 0.03) 0px, rgba(0, 255, 255, 0.03) 1px, transparent 1px, transparent 4px);
+  background-size: 100% 4px;
+  opacity: 0.6;
+  mix-blend-mode: screen;
+}
+
+/* ---- 全局按钮体系（wc-btn → 霓虹） ---- */
+body.theme-cyberpunk .wc-btn {
+  border-radius: 8px;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  background: rgba(34, 211, 238, 0.12);
+  color: #22d3ee;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.25);
+  transition: all 0.3s ease;
+}
+body.theme-cyberpunk .wc-btn:hover {
+  transform: scale(1.03);
+  background: rgba(34, 211, 238, 0.2);
+  box-shadow: 0 0 30px rgba(0, 255, 255, 0.6);
+}
+body.theme-cyberpunk .wc-btn:active {
+  transform: scale(0.95);
+}
+body.theme-cyberpunk .wc-btn.primary,
+body.theme-cyberpunk .wc-btn.gradient {
+  background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+  color: #000;
+  border: none;
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .wc-btn.primary:hover:not(:disabled),
+body.theme-cyberpunk .wc-btn.gradient:hover:not(:disabled) {
+  background: linear-gradient(135deg, #4adeea, #22d3ee);
+  box-shadow: 0 0 30px rgba(0, 255, 255, 0.7);
+}
+body.theme-cyberpunk .wc-btn.primary:active:not(:disabled),
+body.theme-cyberpunk .wc-btn.gradient:active:not(:disabled) {
+  background: linear-gradient(135deg, #0ea5e9, #0891b2);
+}
+body.theme-cyberpunk .wc-btn.gold {
+  background: linear-gradient(135deg, #facc15, #f59e0b);
+  color: #000;
+  border: none;
+  box-shadow: 0 0 15px rgba(250, 204, 21, 0.5);
+}
+body.theme-cyberpunk .wc-btn.success {
+  background: linear-gradient(135deg, #4ade80, #22c55e);
+  color: #000;
+  border: none;
+  box-shadow: 0 0 15px rgba(74, 222, 128, 0.5);
+}
+body.theme-cyberpunk .wc-btn.ghost {
+  background: transparent;
+  border: 1px dashed rgba(34, 211, 238, 0.45);
+  color: #22d3ee;
+  box-shadow: none;
+}
+body.theme-cyberpunk .wc-btn.ghost:hover:not(:disabled) {
+  background: rgba(34, 211, 238, 0.1);
+  border-style: solid;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+}
+body.theme-cyberpunk .wc-btn.danger-soft {
+  background: transparent;
+  border: 1px solid rgba(232, 121, 249, 0.55);
+  color: #e879f9;
+  box-shadow: 0 0 10px rgba(232, 121, 249, 0.3);
+}
+body.theme-cyberpunk .wc-btn.danger-soft:hover:not(:disabled) {
+  background: rgba(232, 121, 249, 0.12);
+  box-shadow: 0 0 25px rgba(232, 121, 249, 0.5);
+  transform: scale(1.03);
+}
+body.theme-cyberpunk .wc-btn:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+}
+
+/* ---- 筛选胶囊（rail-tool / type-pill / skin-chip） ---- */
+body.theme-cyberpunk .rail-tool,
+body.theme-cyberpunk .type-pill,
+body.theme-cyberpunk .skin-chip {
+  border-radius: 8px;
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  background: rgba(13, 13, 21, 0.9);
+  color: #cbd5e1;
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  box-shadow: none;
+}
+body.theme-cyberpunk .rail-tool:hover,
+body.theme-cyberpunk .type-pill:hover,
+body.theme-cyberpunk .skin-chip:hover {
+  transform: scale(1.03);
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.6);
+  background: rgba(13, 13, 21, 1);
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.35);
+}
+body.theme-cyberpunk .rail-tool.active,
+body.theme-cyberpunk .type-pill.active,
+body.theme-cyberpunk .skin-chip.active {
+  background: rgba(34, 211, 238, 0.15);
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.7);
+  font-weight: 600;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+}
+
+/* ---- 分段控件（mode-pill / l2d-seg） ---- */
+body.theme-cyberpunk .mode-toggle {
+  background: rgba(13, 13, 21, 0.9);
+  border: 1px solid rgba(34, 211, 238, 0.25);
+  border-radius: 8px;
+}
+body.theme-cyberpunk .mode-pill.active {
+  background: rgba(34, 211, 238, 0.15);
+  color: #22d3ee;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+  font-weight: 600;
+}
+body.theme-cyberpunk .l2d-seg {
+  background: rgba(13, 13, 21, 0.9);
+  border: 1px solid rgba(34, 211, 238, 0.25);
+  border-radius: 8px;
+}
+body.theme-cyberpunk .l2d-seg-thumb {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.85), rgba(14, 165, 233, 0.85));
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .l2d-seg-item.active {
+  color: #000;
+  font-weight: 600;
+  text-shadow: none;
+}
+
+/* ---- 开关行 ---- */
+body.theme-cyberpunk .l2d-switch-ico {
+  background: rgba(34, 211, 238, 0.14);
+  color: #22d3ee;
+}
+body.theme-cyberpunk .l2d-switch-ico.on {
+  background: rgba(250, 204, 21, 0.16);
+  color: #facc15;
+}
+body.theme-cyberpunk .l2d-switch {
+  background: rgba(34, 211, 238, 0.25);
+}
+body.theme-cyberpunk .l2d-switch::after {
+  box-shadow: 0 0 6px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .l2d-switch.on {
+  background: linear-gradient(120deg, #22d3ee, #0ea5e9);
+}
+
+/* ---- 卡片 / 面板 ---- */
+body.theme-cyberpunk .panel-card,
+body.theme-cyberpunk .wc-card,
+body.theme-cyberpunk .ship-card {
+  background: #0d0d15;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: 8px;
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
+}
+body.theme-cyberpunk .panel-card:hover,
+body.theme-cyberpunk .ship-card:hover {
+  box-shadow: 0 0 25px rgba(0, 255, 255, 0.4);
+}
+body.theme-cyberpunk .panel-title {
+  color: #22d3ee;
+  letter-spacing: 3px;
+  font-family: var(--font-sans);
+  border-bottom-color: rgba(34, 211, 238, 0.3);
+}
+body.theme-cyberpunk .control-panel,
+body.theme-cyberpunk .ship-rail,
+body.theme-cyberpunk .main-topbar {
+  background: rgba(10, 10, 15, 0.92);
+  border-color: rgba(34, 211, 238, 0.25);
+}
+
+/* ---- 皮肤条 / 下载项 / 台词等浅色元素 ---- */
+body.theme-cyberpunk .skin-bar {
+  background: rgba(10, 10, 15, 0.94);
+  border-top-color: rgba(34, 211, 238, 0.25);
+}
+body.theme-cyberpunk .dl-item {
+  background: #0d0d15;
+  border-color: rgba(34, 211, 238, 0.25);
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .dl-item:hover {
+  border-color: rgba(34, 211, 238, 0.5);
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+}
+body.theme-cyberpunk .dl-item.selected {
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(232, 121, 249, 0.1));
+  border-color: rgba(232, 121, 249, 0.6);
+}
+body.theme-cyberpunk .dl-name {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .dl-check {
+  border-color: rgba(34, 211, 238, 0.4);
+  background: rgba(13, 13, 21, 0.9);
+}
+body.theme-cyberpunk .dl-check.on {
+  background: #22d3ee;
+  color: #000;
+  border-color: transparent;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .dim,
+body.theme-cyberpunk .bar-dim {
+  color: #cbd5e1 !important;
+}
+body.theme-cyberpunk .panel-field label,
+body.theme-cyberpunk .export-form label,
+body.theme-cyberpunk .group-title {
+  color: #cbd5e1;
+}
+
+/* ---- 收藏星标 ---- */
+body.theme-cyberpunk .skin-fav-btn {
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  background: rgba(13, 13, 21, 0.9);
+  color: #22d3ee;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.25);
+}
+body.theme-cyberpunk .skin-fav-btn:hover {
+  transform: scale(1.12);
+  box-shadow: 0 0 25px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .skin-fav-btn.on {
+  background: linear-gradient(135deg, #facc15, #f59e0b);
+  border-color: transparent;
+  color: #000;
+  box-shadow: 0 0 20px rgba(250, 204, 21, 0.6);
+}
+
+/* ---- 圆形图标按钮（全屏等） ---- */
+body.theme-cyberpunk .stage-fullscreen-btn {
+  border: 1px solid rgba(34, 211, 238, 0.5);
+  background: rgba(13, 13, 21, 0.8);
+  color: #22d3ee;
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.3);
+}
+body.theme-cyberpunk .stage-fullscreen-btn:hover {
+  background: rgba(34, 211, 238, 0.15);
+  transform: scale(1.08);
+  box-shadow: 0 0 25px rgba(0, 255, 255, 0.5);
+}
+
+/* ---- 迷你导航（动画 ←→ / 页面导航 / 面板导航） ---- */
+body.theme-cyberpunk .anim-nav-btn,
+body.theme-cyberpunk .page-nav-btn,
+body.theme-cyberpunk .panel-nav-btn {
+  border-radius: 8px;
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  background: rgba(13, 13, 21, 0.9);
+  color: #22d3ee;
+  font-family: var(--font-sans);
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.2);
+}
+body.theme-cyberpunk .anim-nav-btn:hover,
+body.theme-cyberpunk .page-nav-btn:hover,
+body.theme-cyberpunk .panel-nav-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 25px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .page-nav-btn.active,
+body.theme-cyberpunk .panel-nav-btn.active {
+  background: rgba(34, 211, 238, 0.16);
+  color: #22d3ee;
+  border-color: rgba(34, 211, 238, 0.7);
+  font-weight: 600;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+}
+body.theme-cyberpunk .anim-nav-label {
+  color: #cbd5e1;
+  font-family: var(--font-sans);
+}
+
+/* ---- L2D 互动面板：深色 + 青霓虹 ---- */
+body.theme-cyberpunk .l2d-panel-a {
+  width: 252px;
+  background: linear-gradient(165deg, rgba(13, 13, 21, 0.92), rgba(8, 8, 12, 0.9));
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  border-radius: 8px;
+  box-shadow: 0 0 25px rgba(0, 255, 255, 0.3);
+  padding: 12px 12px 10px;
+}
+body.theme-cyberpunk .l2d-panel-a-title {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: #22d3ee;
+  text-shadow: 0 0 10px rgba(0, 255, 255, 0.6);
+}
+body.theme-cyberpunk .l2d-panel-a-dot {
+  background: #22d3ee;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.9);
+}
+body.theme-cyberpunk .l2d-panel-a-collapse {
+  background: rgba(34, 211, 238, 0.15);
+  color: #22d3ee;
+}
+body.theme-cyberpunk .l2d-panel-a-collapse:hover {
+  background: rgba(34, 211, 238, 0.3);
+  color: #000;
+}
+body.theme-cyberpunk .l2d-switch-row:hover {
+  background: rgba(34, 211, 238, 0.06);
+}
+body.theme-cyberpunk .l2d-switch-txt {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .l2d-switch-txt small {
+  color: #cbd5e1;
+}
+body.theme-cyberpunk .l2d-subtitle-a {
+  background: rgba(13, 13, 21, 0.9);
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: 8px;
+  color: #22d3ee;
+  text-shadow: 0 0 8px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .l2d-subtitle-a::before {
+  color: rgba(34, 211, 238, 0.8);
+}
+body.theme-cyberpunk .l2d-subtitle-a-who {
+  color: #facc15;
+}
+body.theme-cyberpunk .l2d-subtitle-a.empty {
+  color: #6b7280;
+  text-shadow: none;
+}
+
+/* ---- 预览舞台：赛博朋克深色（本来即深蓝，改为霓虹底） ---- */
+body.theme-cyberpunk .preview-stage.bg-auto,
+body.theme-cyberpunk .preview-stage.bg-gradient {
+  background:
+    radial-gradient(50% 55% at 50% 40%, rgba(34, 211, 238, 0.12), transparent 65%),
+    radial-gradient(40% 45% at 75% 75%, rgba(232, 121, 249, 0.1), transparent 65%),
+    linear-gradient(160deg, #0a0a0f, #0d0d15 55%, #0a0a0f);
+}
+body.theme-cyberpunk .preview-stage.bg-solid {
+  background: #0a0a0f;
+}
+body.theme-cyberpunk .preview-stage.bg-monet {
+  background:
+    radial-gradient(60% 70% at 20% 25%, rgba(34, 211, 238, 0.2), transparent 60%),
+    radial-gradient(55% 65% at 80% 20%, rgba(232, 121, 249, 0.18), transparent 60%),
+    radial-gradient(70% 80% at 50% 95%, rgba(250, 204, 21, 0.1), transparent 60%),
+    linear-gradient(160deg, #0d0d15, #0a0a0f);
+}
+body.theme-cyberpunk .preview-stage.bg-frost {
+  background:
+    radial-gradient(45% 55% at 30% 30%, rgba(34, 211, 238, 0.15), transparent 60%),
+    radial-gradient(45% 55% at 75% 70%, rgba(232, 121, 249, 0.12), transparent 60%),
+    linear-gradient(180deg, #0d0d15, #0a0a0f);
+}
+body.theme-cyberpunk .preview-stage.bg-star {
+  background:
+    radial-gradient(1.5px 1.5px at 20% 30%, rgba(34, 211, 238, 0.9), transparent 60%),
+    radial-gradient(1.5px 1.5px at 60% 15%, rgba(232, 121, 249, 0.8), transparent 60%),
+    radial-gradient(1.5px 1.5px at 80% 45%, rgba(255, 255, 255, 0.7), transparent 60%),
+    radial-gradient(1.5px 1.5px at 40% 70%, rgba(34, 211, 238, 0.8), transparent 60%),
+    radial-gradient(1.5px 1.5px at 90% 80%, rgba(250, 204, 21, 0.7), transparent 60%),
+    linear-gradient(180deg, #0d0d15, #0a0a0f);
+}
+body.theme-cyberpunk .stage-info-name {
+  color: #22d3ee;
+  font-family: var(--font-sans);
+  text-shadow: 0 0 12px rgba(0, 255, 255, 0.6);
+}
+body.theme-cyberpunk .stage-info-skin {
+  color: #cbd5e1;
+}
+body.theme-cyberpunk .preview-title {
+  color: #22d3ee;
+  font-family: var(--font-sans);
+  text-shadow: 0 0 15px rgba(0, 255, 255, 0.6);
+}
+body.theme-cyberpunk .preview-sub {
+  color: #cbd5e1;
+}
+
+/* ---- 设置页 About / 主题选择器 ---- */
+body.theme-cyberpunk .about-name {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .about-version {
+  background: rgba(34, 211, 238, 0.14);
+  color: #22d3ee;
+  font-family: var(--font-sans);
+}
+body.theme-cyberpunk .about-desc {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .about-desc b {
+  color: #22d3ee;
+}
+body.theme-cyberpunk .about-list {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .about-list li::marker {
+  color: #22d3ee;
+}
+body.theme-cyberpunk .about-sec {
+  color: #22d3ee;
+  border-bottom-color: rgba(34, 211, 238, 0.3);
+}
+body.theme-cyberpunk .about-foot {
+  color: #cbd5e1;
+  border-top-color: rgba(34, 211, 238, 0.3);
+}
+body.theme-cyberpunk .about-logo {
+  background: rgba(34, 211, 238, 0.12);
+  border-color: rgba(34, 211, 238, 0.45);
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+}
+body.theme-cyberpunk .theme-opt {
+  border-color: rgba(34, 211, 238, 0.3);
+  background: rgba(13, 13, 21, 0.9);
+}
+body.theme-cyberpunk .theme-opt:hover {
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.35);
+}
+body.theme-cyberpunk .theme-opt.active {
+  border-color: rgba(34, 211, 238, 0.7);
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.12), rgba(232, 121, 249, 0.1));
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+}
+body.theme-cyberpunk .theme-name {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .theme-check {
+  color: #22d3ee;
+}
+body.theme-cyberpunk .theme-swatch {
+  border-color: rgba(34, 211, 238, 0.5);
+}
+body.theme-cyberpunk .theme-swatch-watercolor {
+  background:
+    radial-gradient(60% 60% at 30% 30%, rgba(34, 211, 238, 0.9), transparent 70%),
+    radial-gradient(60% 60% at 70% 65%, rgba(232, 121, 249, 0.9), transparent 70%),
+    linear-gradient(135deg, #0a0a0f, #0d0d15);
+}
+body.theme-cyberpunk .theme-swatch-shoujo {
+  background:
+    radial-gradient(60% 60% at 30% 30%, rgba(255, 183, 197, 0.9), transparent 70%),
+    radial-gradient(60% 60% at 70% 65%, rgba(196, 181, 253, 0.9), transparent 70%),
+    linear-gradient(135deg, #fff5f7, #ffe9ee);
+}
+
+/* ---- 设置页其它浅色细节 ---- */
+body.theme-cyberpunk .update-result {
+  background: rgba(13, 13, 21, 0.9);
+  border-color: rgba(34, 211, 238, 0.25);
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .voice-dl-stage {
+  background: rgba(250, 204, 21, 0.1);
+  border-color: rgba(250, 204, 21, 0.4);
+  color: #facc15;
+}
+body.theme-cyberpunk .update-line {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .update-review {
+  color: #facc15;
+}
+body.theme-cyberpunk .update-error {
+  color: #e879f9;
+}
+body.theme-cyberpunk .wc-card .n-checkbox__label,
+body.theme-cyberpunk .field label {
+  color: #e5e7eb;
+}
+body.theme-cyberpunk .page-header h1 {
+  color: #22d3ee;
+  text-shadow: 0 0 12px rgba(0, 255, 255, 0.5);
+}
+
+/* =========================================================
+   Naive 组件覆盖（霓虹）
+   ========================================================= */
+body.theme-cyberpunk .n-button {
+  background-image: linear-gradient(135deg, #22d3ee, #0ea5e9) !important;
+  border: none !important;
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.5) !important;
+  color: #000 !important;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+body.theme-cyberpunk .n-button:hover {
+  background-image: linear-gradient(135deg, #67e8f9, #22d3ee) !important;
+  box-shadow: 0 0 30px rgba(0, 255, 255, 0.7) !important;
+}
+body.theme-cyberpunk .n-button:active {
+  background-image: linear-gradient(135deg, #0ea5e9, #0284c7) !important;
+}
+body.theme-cyberpunk .n-button[disabled] {
+  background-image: linear-gradient(135deg, #1e293b, #0f172a) !important;
+  color: #64748b !important;
+  box-shadow: none !important;
+}
+body.theme-cyberpunk .n-button--secondary-type {
+  background-image: linear-gradient(180deg, #0d0d15, #0a0a0f) !important;
+  border: 1px solid rgba(34, 211, 238, 0.45) !important;
+  color: #22d3ee !important;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.2) !important;
+}
+body.theme-cyberpunk .n-button--secondary-type:hover {
+  border-color: rgba(34, 211, 238, 0.8) !important;
+  color: #67e8f9 !important;
+  box-shadow: 0 0 25px rgba(0, 255, 255, 0.5) !important;
+}
+body.theme-cyberpunk .n-button--error-type {
+  background-image: linear-gradient(180deg, rgba(232, 121, 249, 0.12), rgba(232, 121, 249, 0.06)) !important;
+  border: 1px solid rgba(232, 121, 249, 0.6) !important;
+  color: #e879f9 !important;
+  box-shadow: 0 0 10px rgba(232, 121, 249, 0.3) !important;
+}
+body.theme-cyberpunk .n-button--error-type:hover {
+  background-image: linear-gradient(180deg, rgba(232, 121, 249, 0.2), rgba(232, 121, 249, 0.12)) !important;
+  border-color: rgba(232, 121, 249, 0.85) !important;
+  color: #f0abfc !important;
+}
+body.theme-cyberpunk .n-button--error-type:active {
+  background-image: linear-gradient(180deg, rgba(232, 121, 249, 0.28), rgba(232, 121, 249, 0.2)) !important;
+}
+body.theme-cyberpunk .n-button--quaternary-type {
+  background-image: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+body.theme-cyberpunk .n-button--quaternary-type:hover {
+  background-image: none !important;
+}
+body.theme-cyberpunk .n-button--quaternary-type.n-button--error-type {
+  color: #e879f9 !important;
+}
+body.theme-cyberpunk .n-button--quaternary-type.n-button--error-type:hover {
+  color: #f0abfc !important;
+  background-image: none !important;
+}
+
+/* ---- 遗漏的深色文字修正（深背景下可见性） ---- */
+/* 角色名/信息文字（左侧栏、船卡） */
+body.theme-cyberpunk .rail-char,
+body.theme-cyberpunk .rail-name,
+body.theme-cyberpunk .rail-skin,
+body.theme-cyberpunk .rail-star,
+body.theme-cyberpunk .ship-name,
+body.theme-cyberpunk .ship-en,
+body.theme-cyberpunk .skin-count,
+body.theme-cyberpunk .ship-watermark,
+body.theme-cyberpunk .plugin-row,
+body.theme-cyberpunk .preview-heading {
+  color: #e5e7eb !important;
+}
+body.theme-cyberpunk .rail-skin {
+  color: #cbd5e1 !important;
+}
+body.theme-cyberpunk .ship-card .skin-count,
+body.theme-cyberpunk .ship-meta {
+  color: #cbd5e1 !important;
+}
+
+/* wc-pill：硬编码深色文字 → 霓虹色 */
+body.theme-cyberpunk .wc-pill.rose {
+  color: #e879f9;
+  background: rgba(232, 121, 249, 0.14);
+}
+body.theme-cyberpunk .wc-pill.green {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.14);
+}
+body.theme-cyberpunk .wc-pill.gold {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.14);
+}
+body.theme-cyberpunk .wc-pill.blue {
+  color: #22d3ee;
+  background: rgba(34, 211, 238, 0.14);
+}
+
+/* 导出动画多选标签（anim-multi n-tag）深蓝字 → 青色 */
+body.theme-cyberpunk .anim-multi :deep(.n-base-selection-tag-wrapper .n-tag),
+body.theme-cyberpunk .anim-multi .n-base-selection-tag-wrapper .n-tag {
+  background: rgba(34, 211, 238, 0.14) !important;
+  border-color: rgba(34, 211, 238, 0.4) !important;
+  color: #22d3ee !important;
+}
+body.theme-cyberpunk .anim-multi :deep(.n-base-selection-tag-wrapper .n-tag .n-tag__close),
+body.theme-cyberpunk .anim-multi .n-base-selection-tag-wrapper .n-tag .n-tag__close {
+  color: #22d3ee !important;
+}
+
+/* active 态深蓝文字 → 青色（rail-tool/type-pill/panel-nav/page-nav/skin-chip） */
+body.theme-cyberpunk .rail-tool.active,
+body.theme-cyberpunk .type-pill.active,
+body.theme-cyberpunk .panel-nav-btn.active,
+body.theme-cyberpunk .page-nav-btn.active,
+body.theme-cyberpunk .skin-chip.active {
+  color: #22d3ee !important;
+}
+
+/* 下载进度 / 提示消息 / 批量条等 */
+body.theme-cyberpunk .dl-progress-label,
+body.theme-cyberpunk .dl-progress-stage,
+body.theme-cyberpunk .dl-progress-meta,
+body.theme-cyberpunk .batch-progress-text,
+body.theme-cyberpunk .dl-ok {
+  color: #e5e7eb !important;
+}
+body.theme-cyberpunk .dl-progress-meta,
+body.theme-cyberpunk .batch-progress-text {
+  color: #cbd5e1 !important;
+}
+body.theme-cyberpunk .download-msg {
+  background: rgba(13, 13, 21, 0.95);
+  border-color: rgba(34, 211, 238, 0.4);
+  color: #e5e7eb;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.35);
+}
+body.theme-cyberpunk .batch-bar {
+  background: rgba(13, 13, 21, 0.95);
+  border-color: rgba(34, 211, 238, 0.4);
+  box-shadow: 0 0 25px rgba(0, 255, 255, 0.35);
+}
+body.theme-cyberpunk .panel-tip {
+  color: #facc15;
+}
+body.theme-cyberpunk .export-alert {
+  color: #e5e7eb !important;
+}
+body.theme-cyberpunk .filter-field label {
+  color: #cbd5e1;
+}
+body.theme-cyberpunk .zoom-hint {
+  color: rgba(255, 255, 255, 0.6) !important;
+}
+body.theme-cyberpunk .l2d-subtitle-box {
+  color: rgba(255, 255, 255, 0.75) !important;
+}
+body.theme-cyberpunk .main-title {
+  color: #e5e7eb !important;
+}
+body.theme-cyberpunk .main-title h1 {
+  color: #22d3ee !important;
+  text-shadow: 0 0 12px rgba(0, 255, 255, 0.5);
+}
+body.theme-cyberpunk .rail-card {
+  background: rgba(13, 13, 21, 0.85);
+  border-color: rgba(34, 211, 238, 0.2);
+}
+body.theme-cyberpunk .rail-card:hover {
+  border-color: rgba(34, 211, 238, 0.5);
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+}
+body.theme-cyberpunk .rail-check {
+  border-color: rgba(34, 211, 238, 0.45);
+  color: #22d3ee;
+}
+body.theme-cyberpunk .filter-field {
+  color: #e5e7eb;
+}

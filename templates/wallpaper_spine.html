@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!--
+================================================================================
+ BD2《棕色尘埃2》Spine 4.1 壁纸导出模板（由碧蓝航线 3.8 模板改造）
+--------------------------------------------------------------------------------
+ 运行时：@esotericsoftware/spine-webgl@4.1.19（UMD，仓库内 templates/spine41/spine-webgl-4.1.js）。
+ 面向 BD2 的 Spine 4.1.x 二进制 .skel（实测导出版本 4.1.11）：
+   - 运行时同大版本兼容小版本数据（4.1.19 读 4.1.11 skel 正常）；
+   - 二进制 skel 用 spine.SkeletonBinary 加载（base64 内联，由导出器注入 LAYERS_JSON）；
+   - 标准 Spine atlas：首行贴图名 + size:/filter: 页头；多页贴图按 atlas 内页声明顺序引用
+     （{name}.png、{name}_2.png…，页名 = page.name，与导出器复制进 assets/ 的文件名一致）。
+
+ 与碧蓝航线 3.8 模板的差异（本模板的前身，仅作沿革记录）：
+   1) 运行时 3.8 → 4.1：<script src="spine-webgl-4.1.js">；
+   2) Spine 4.1 移除 TextureAtlas 构造器的 pageLoader 参数：改为一律
+      new spine.TextureAtlas(atlasText) 后 atlas.pages.forEach(page => page.setTexture(tex))，
+      setTexture 会自动应用 atlas 页头的 filter/repeat 设置；
+   3) 4.1 全局命名空间扁平化：spine.webgl.SceneRenderer / spine.webgl.GLTexture
+      → spine.SceneRenderer / spine.GLTexture（无 webgl 子命名空间）；
+   4) 4.1 混合函数三参：PolygonBatcher.setBlendMode(srcColorBlend, srcAlphaBlend, dstBlend)
+      = gl.blendFuncSeparate（本模板无独立背景图分支，未直接使用；预览端 drawBg 已同步三参）；
+   4b) 4.1 附件顶点计算签名变化：RegionAttachment.computeWorldVertices 首参由 bone 改为 slot
+      （slot.bone 内部解析；6 参形式的 Mesh/BoundingBoxAttachment.computeWorldVertices(slot,start,
+      count,...) 不变）——取景代码三处（layerBounds/contentFrame/denseAreaFrame）已同步；
+   5) BD2 资产特点：单角色单骨架为主（主立绘/约会/演出均为单一 skel，无碧蓝 _T/_B/_M
+      多骨架分层）。约会立绘的背景部件在同一骨架内（骨架自身 drawOrder 保证先后），
+      isBgLayer/renderOrder 逻辑保留以兼容未来多骨架场景，单骨架时自动空转；
+   6) 贴图是否预乘 alpha 未确认：保留碧蓝方案（原样上传 + drawSkeleton premultiplied=true），
+      提供 BD2_PREMULTIPLY_UPLOAD 开关（下方有切换方向说明）。
+
+ 保留的碧蓝铁律行为（全部适用）：
+   - 预乘 alpha 原样上传：UNPACK_PREMULTIPLY_ALPHA_WEBGL=false（BD2_PREMULTIPLY_UPLOAD 开关）；
+   - 动画选择/循环/开场（login 入场一次回待机）/点击互动（drag 状态机 + touch 轮换 +
+     官方 config_client 规则 + 数字表情叠加）；
+   - wallpaperPropertyListener 属性接入：首推无条件跳过版式（铁律 4），只采纳用户偏好开关；
+   - 16:9 布局单一事实来源 wallpaper-layout.js（spineCamera + 缩放/偏移/对齐语义）；
+   - 取景三层链 computeBounds：背景层取景（横构图护栏 + 面积护栏）→ contentFrame（网格密度）
+     → denseAreaFrame（面积过滤）→ 逐层兜底；BD2 立绘普遍竖长构图，无背景层分支时自动
+     走 contentFrame→denseAreaFrame→兜底，收紧到不透明区域。
+================================================================================
+-->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #050510; }
+  #bg-layer { position: fixed; inset: 0; z-index: 0; {{BG_CSS}} }
+  #canvas { display: block; width: 100vw; height: 100vh; background: transparent; position: relative; z-index: 1; opacity: 0; transition: opacity .8s; }
+  #canvas.ready { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="bg-layer"></div>
+<canvas id="canvas"></canvas>
+<!-- Spine 4.1 运行时：随壁纸项目一起导出（离线可用，不依赖 CDN）。 -->
+<script src="spine-webgl-4.1.js"></script>
+<script src="wallpaper-layout.js"></script>
+<script src="bd2-interact.js"></script>
+<script>
+// ===== 皮肤配置（导出器注入） =====
+var LAYERS = {{LAYERS_JSON}};   // [{ name, skelData(base64), atlasText, textures:[{page,file}] }]
+var BG_IMAGES = {{BG_IMAGES_JSON}}; // cutscene 独立背景图：[{file:"assets/xxx.png"}]；无背景 = []
+var BG_SCALE = {{BG_SCALE}};    // 背景独立缩放 %（30~300，100=默认铺满取景框）
+var SCALE = {{SCALE}};          // 百分比：100 = 自适应（20~300）
+var OFFSET_X = {{OFFSET_X}};    // 画布宽 %
+var OFFSET_Y = {{OFFSET_Y}};    // 画布高 %
+var ALIGNMENT = "{{ALIGNMENT}}"; // center / left-top / right-top / left-bottom / right-bottom
+var ANIMATION = {{ANIMATION}};  // 导出的初始动画名（空则按 idle/normal 自动选择）
+var VOICE_JSON = {{VOICE_JSON}}; // 互动语音配置 {dir,pick,mains}；null=无语音
+var VOICE_ON = {{VOICE}};       // 互动语音开关（false=壁纸不播语音）
+var INTRO_ON = {{INTRO}};       // 开场动画开关（false=不播 login 入场直接待机）
+var INTERACT_ON = {{INTERACT}}; // 互动开关（false=点击/拖拽不触发动画反应）
+var HIT_AREAS = {{HIT_AREAS_JSON}}; // 碧蓝互动区域数据（BD2 恒为 []，模板接口兼容保留）
+
+// ===== BD2 贴图 alpha 上传开关（实测：BD2 贴图是直通 alpha，必须 true）=====
+// true：BD2 贴图 RGB 未预乘 A（直通 alpha），texImage2D 时由浏览器预乘，
+//       drawSkeleton(..., true) 按预乘混合（ONE / ONE_MINUS_SRC_ALPHA）绘制。
+// 实测依据：false（按预乘直传）时深色背景下正常、浅色背景整体洗白发亮
+//（= 直通数据被按预乘混合，dst*(1-a) 项过量），设 true 后浅色背景颜色正确。
+// （2026-08-26 端到端截图验证：Liberta Hedonist 浅色渐变背景下色彩饱和正确。）
+var BD2_PREMULTIPLY_UPLOAD = true;
+
+var canvas = document.getElementById("canvas");
+var gl = null, renderer = null;
+var skeletons = [], pending = new Array(LAYERS.length);
+var loadedCount = 0, lastFrame = 0;
+var boundsCache = null;
+var pendingAnim = null; // WE 属性推送可能早于动画就绪，先暂存再在 buildScene 里生效
+var bgImages = [];      // 已加载的独立背景图（cutscene 完整背景，不在 Spine 骨架内）
+var bgImagesReady = false;
+var bgTexCache = null;  // 背景图 GL 纹理缓存
+
+function showError(msg) { console.error(msg); document.title = "ERR " + msg; }
+
+// 选附件最多的 skin：默认优先，同数时保持 default；遍历计数（不含透明插槽与位置标记）。
+// 与预览 SpinePreview.vue 的 bestSkin 完全一致——部分皮肤（足尖弓矢、交错的温柔时光等）
+// 的 default skin 只有残缺部件（如只有脚/上半身），必须选完整 skin，否则导出后缺身体。
+function bestSkin(data) {
+  var skins = data.skins || [];
+  if (skins.length <= 1) return data.defaultSkin || skins[0];
+  var best = data.defaultSkin || skins[0];
+  var bestCount = -1;
+  for (var si = 0; si < skins.length; si++) {
+    var sk = skins[si];
+    var count = 0;
+    var skel = new spine.Skeleton(data);
+    skel.setSkin(sk);
+    skel.setSlotsToSetupPose();
+    skel.updateWorldTransform();
+    for (var s2 = 0; s2 < skel.slots.length; s2++) {
+      var slot = skel.slots[s2], att = slot.getAttachment();
+      if (!att) continue;
+      if (slot.color && slot.color.a < 0.01) continue;
+      if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+      count++;
+    }
+    if (count > bestCount) {
+      bestCount = count;
+      best = sk;
+    }
+  }
+  return best;
+}
+
+function loadLayer(idx) {
+  var cfg = LAYERS[idx];
+  var texMap = {};
+  var remaining = cfg.textures.length;
+  function start() {
+    try {
+      var glTex = {};
+      // 贴图按 BD2_PREMULTIPLY_UPLOAD 原样/预乘上传（见开关注释）。
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, BD2_PREMULTIPLY_UPLOAD);
+      Object.keys(texMap).forEach(function (p) { glTex[p] = new spine.GLTexture(gl, texMap[p]); });
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, BD2_PREMULTIPLY_UPLOAD);
+      // Spine 4.1：TextureAtlas 构造器不再接收 pageLoader 回调；
+      // 解析后逐页绑定已上传的 GLTexture（page.name = atlas 声明的贴图文件名，
+      // 缺页兜底用第一张——正常导出不会发生）。setTexture 自动应用页头 filter/repeat。
+      var atlas = new spine.TextureAtlas(cfg.atlasText);
+      atlas.pages.forEach(function (page) { page.setTexture(glTex[page.name] || glTex[Object.keys(glTex)[0]]); });
+      var loader = new spine.AtlasAttachmentLoader(atlas);
+      var bin = atob(cfg.skelData);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      var data = new spine.SkeletonBinary(loader).readSkeletonData(bytes);
+      var skeleton = new spine.Skeleton(data);
+      skeleton.setSkin(bestSkin(data));
+      skeleton.setSlotsToSetupPose();
+      skeleton.updateWorldTransform();
+      var state = new spine.AnimationState(new spine.AnimationStateData(data));
+      pending[idx] = { skeleton: skeleton, state: state, data: data, name: cfg.name };
+    } catch (e) { showError("layer " + cfg.name + ": " + e.message); return; }
+    loadedCount++;
+    maybeBuildScene();
+  }
+  if (!remaining) { start(); return; }
+  cfg.textures.forEach(function (t) {
+    var img = new Image();
+    img.onload = function () { texMap[t.page] = img; if (--remaining === 0) start(); };
+    img.onerror = function () { showError("texture fail " + t.file); };
+    img.src = t.file;
+  });
+}
+
+// buildScene 必须在「骨架层 + 独立背景图」都就绪后才执行：
+// computeBounds 依赖背景图尺寸做背景取景，若背景未加载完就缓存角色取景，
+// 导出的壁纸尺寸会和预览不一致（预览端等背景一起加载，导出处漏了这一步）。
+var _sceneBuilt = false;
+function maybeBuildScene() {
+  if (_sceneBuilt) return;
+  if (loadedCount >= LAYERS.length && bgImagesReady) {
+    _sceneBuilt = true;
+    buildScene();
+  }
+}
+
+// 独立背景图（cutscene）：与骨架层并行加载，就绪前渲染跳过背景
+function loadBgImages() {
+  if (!BG_IMAGES || !BG_IMAGES.length) { bgImagesReady = true; maybeBuildScene(); return; }
+  var remaining = BG_IMAGES.length;
+  BG_IMAGES.forEach(function (b) {
+    var img = new Image();
+    img.onload = function () { bgImages.push(img); if (--remaining === 0) { bgImagesReady = true; maybeBuildScene(); } };
+    img.onerror = function () { showError("bg load fail " + b.file); if (--remaining === 0) { bgImagesReady = true; maybeBuildScene(); } };
+    img.src = b.file;
+  });
+}
+
+// 背景图绘制：铺满整个相机可视区域（世界坐标），画在骨架下面。
+// 与预览 SpinePreview.vue 的 drawBg 一致（等比 cover + 2% 外扩，任何画布比例都无露底；
+// 背景 PNG 是直通 alpha，SRC_ALPHA 混合）。
+function drawBgImage(img) {
+  if (!renderer || !img) return;
+  if (!bgTexCache || bgTexCache._img !== img) {
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    bgTexCache = new spine.GLTexture(gl, img);
+    bgTexCache._img = img;
+  }
+  // 背景基于角色取景框绘制：随角色缩放/偏移等比联动（预览 SpinePreview.vue 的 drawBg 一致）。
+  var bounds = computeBounds();
+  var bw = bounds.maxX - bounds.minX;
+  var bh = bounds.maxY - bounds.minY;
+  if (!bw || !bh) return;
+  var iw = img.width || 1, ih = img.height || 1;
+  var scale = (Math.max(bw / iw, bh / ih)) * 1.15 * (BG_SCALE / 100);
+  var w = iw * scale, h = ih * scale;
+  var cx = (bounds.minX + bounds.maxX) / 2;
+  var cy = (bounds.minY + bounds.maxY) / 2;
+  renderer.batcher.setBlendMode(gl.SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  renderer.drawTexture(bgTexCache, cx - w / 2, cy - h / 2, w, h);
+  renderer.batcher.setBlendMode(gl.ONE, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+}
+
+function pickAnim(sd) {
+  var names = sd.animations.map(function (a) { return a.name; });
+  var idle = names.find(function (n) { return /idle/i.test(n); }) || names.find(function (n) { return n === "normal"; });
+  return idle || names[0] || "";
+}
+
+// 表情类动画判定：碧蓝 spine 的数字动画（1/2/3...）是"表情集"——只含 1 帧
+// AttachmentTimeline（duration=0），在 t=0 切换眼睛/嘴等附件，不是循环动作。
+// 必须叠加到独立 track（track 1）与 track 0 的 normal 动作同时生效；
+// 若 setAnimation(0,...) 替换 track 0 的 normal，骨架会回到无动作状态变静态。
+function isExpression(name, sd) {
+  var a = sd && sd.animations && sd.animations.find(function (x) { return x.name === name; });
+  return !!(a && a.duration <= 0);
+}
+
+function playAnim(name) {
+  pendingAnim = name || null;
+  if (!skeletons.length) return;
+  var shared = name || pickAnim(skeletons[0].data);
+  skeletons.forEach(function (l) {
+    if (!shared) return;
+    if (!l.data.animations.some(function (a) { return a.name === shared; })) {
+      // 当前层没有该动画/表情：回退默认动作
+      var fb = pickAnim(l.data);
+      if (fb) l.state.setAnimation(0, fb, true);
+      return;
+    }
+    if (isExpression(shared, l.data)) {
+      // 表情：叠加到 track 1，不覆盖 track 0 的动作；播放一次即可（只切附件）。
+      // 关键：若 track 0 当前无动作（例如导出的初始动画本身就是表情），
+      // 必须先播默认动作到 track 0，否则表情叠加在空 track 上 = 静态。
+      var cur = l.state.getCurrent(0);
+      if (!cur) {
+        var def = pickAnim(l.data);
+        if (def) l.state.setAnimation(0, def, true);
+      }
+      l.state.setAnimation(1, shared, false);
+    } else {
+      // 常规动作：替换 track 0，循环播放；同时清掉 track 1 的表情残留
+      l.state.clearTrack(1);
+      l.state.setAnimation(0, shared, true);
+    }
+  });
+}
+
+// WE combo 的 value 可能是动画名（{label,value} 格式的隐藏值），
+
+
+function isBgLayer(l) {
+  // 背景层识别：skel 名去掉 .skel 后以 B/BG/_B/bg/_bg（可带数字）结尾
+  if (!l || !l.skeleton || !l.name) return false;
+  return /b(?:g)?\d*$/i.test(l.name.replace(/\.skel$/i, ''));
+}
+
+// 插槽级背景面板过滤：约会/演出皮肤骨架内嵌的全屏背景网格/黑边面板
+//（BK / B_BG_* / bg_* / BG_*）不参与取景，但正常渲染。
+function isBgPanelSlot(slot) {
+  var nm = (((slot.data && slot.data.name) || '') + '').toLowerCase().trim();
+  return nm === 'bk' || nm === 'bg' || nm.indexOf('b_bg') === 0 || nm.indexOf('bg_') === 0 || nm.indexOf('bg-') === 0;
+}
+
+function renderOrder() {
+  // 背景层永远先画：layers 顺序来自文件名排序，不保证 B 在前
+  var bg = skeletons.filter(isBgLayer);
+  var rest = skeletons.filter(function (l) { return !isBgLayer(l); });
+  return bg.concat(rest);
+}
+
+function applyCharacterFit() {
+  // 场景型皮肤“人物适配”：人物骨架明显大于背景层时（月下起舞 2 倍、秘密特训 1.5 倍），
+  // 等比缩小到背景高度 70%，使其不超过背景、保持合适比例（与官方海报一致）。
+  // 只缩不放；人物高度 ≤ 背景 1.15 倍时保持原样。中心锚点 x = cx*(1-s)。
+  var bgLayers = skeletons.filter(isBgLayer);
+  if (!bgLayers.length) return;
+  var bgFrame = layerBounds(bgLayers[0]);
+  if (!isFinite(bgFrame.minX)) return;
+  var charLayers = skeletons.filter(function (l) { return !isBgLayer(l); });
+  if (!charLayers.length) return;
+  var per = charLayers.map(layerBounds).filter(function (b) { return isFinite(b.minX); });
+  if (!per.length) return;
+  var cMinX = Math.min.apply(null, per.map(function (b) { return b.minX; }));
+  var cMaxX = Math.max.apply(null, per.map(function (b) { return b.maxX; }));
+  var cMinY = Math.min.apply(null, per.map(function (b) { return b.minY; }));
+  var cMaxY = Math.max.apply(null, per.map(function (b) { return b.maxY; }));
+  var bgH = bgFrame.maxY - bgFrame.minY;
+  var charH = cMaxY - cMinY;
+  if (!bgH || !charH || charH <= bgH * 1.15) return;
+  var s = (bgH * 0.7) / charH;
+  var cx = (cMinX + cMaxX) / 2, cy = (cMinY + cMaxY) / 2;
+  for (var i = 0; i < charLayers.length; i++) {
+    var sk = charLayers[i].skeleton;
+    sk.x = cx * (1 - s);
+    sk.y = cy * (1 - s);
+    sk.scaleX = s;
+    sk.scaleY = s;
+    sk.updateWorldTransform();
+  }
+}
+
+function buildScene() {
+  skeletons = [];
+  for (var i = 0; i < pending.length; i++) if (pending[i]) skeletons.push(pending[i]);
+  playAnim(pendingAnim || ANIMATION);
+  // 把动画推进到 t=0，用初始姿态构建稳定的边界缓存（避免动画特效撑爆边界）
+  skeletons.forEach(function (l) {
+    l.state.update(0);
+    l.state.apply(l.skeleton);
+    l.skeleton.updateWorldTransform();
+  });
+  // 风景型皮肤：人物远大于背景时等比缩小到背景内（如 月下起舞）
+  applyCharacterFit();
+  computeBounds();
+  applyLayout();
+  // 初始化互动（皮肤含 drag 动画时启用）
+  initInteract();
+  lastFrame = performance.now() / 1000;
+  canvas.classList.add("ready");
+  requestAnimationFrame(render);
+}
+
+function layerBounds(l) {
+  var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (var i = 0; i < l.skeleton.slots.length; i++) {
+    var slot = l.skeleton.slots[i], att = slot.getAttachment();
+    if (!att) continue;
+    // 透明插槽与 kkkkk 位置标记附件不参与取景（避免包围盒被撑爆、角色出视野）
+    if (slot.color && slot.color.a < 0.01) continue;
+    if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+    if (isBgPanelSlot(slot)) continue; // 全屏背景网格/黑边面板不参与取景
+    var isRegion = att instanceof spine.RegionAttachment;
+    if (!isRegion && !(att instanceof spine.MeshAttachment) && !(att instanceof spine.BoundingBoxAttachment)) continue;
+    var len = isRegion ? 8 : att.worldVerticesLength;
+    if (!len) continue;
+    var verts = spine.Utils.newFloatArray(len);
+    if (isRegion) att.computeWorldVertices(slot, verts, 0, 2);
+    else att.computeWorldVertices(slot, 0, len, verts, 0, 2);
+    for (var j = 0; j < len; j += 2) {
+      if (verts[j] < minX) minX = verts[j];
+      if (verts[j] > maxX) maxX = verts[j];
+      if (verts[j + 1] < minY) minY = verts[j + 1];
+      if (verts[j + 1] > maxY) maxY = verts[j + 1];
+    }
+  }
+  return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+}
+
+function contentFrame() {
+  // 按附件面积加权的网格密度取景：只框住内容密集区域，
+  // 用于骨架包围盒被大面积背景网格/稀疏光效撑爆、角色被“挤”小的皮肤
+  var raw = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+  var items = [];
+  skeletons.forEach(function (l) {
+    for (var i = 0; i < l.skeleton.slots.length; i++) {
+      var slot = l.skeleton.slots[i], att = slot.getAttachment();
+      if (!att) continue;
+      if (slot.color && slot.color.a < 0.01) continue;
+      if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+      if (isBgPanelSlot(slot)) continue; // 全屏背景网格/黑边面板不参与取景
+      var isRegion = att instanceof spine.RegionAttachment;
+      var isMesh = att instanceof spine.MeshAttachment;
+      if (!isRegion && !isMesh) continue;
+      var len = isRegion ? 8 : att.worldVerticesLength;
+      if (!len) continue;
+      var verts = spine.Utils.newFloatArray(len);
+      if (isRegion) att.computeWorldVertices(slot, verts, 0, 2);
+      else att.computeWorldVertices(slot, 0, len, verts, 0, 2);
+      var b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+      for (var j = 0; j < len; j += 2) {
+        if (verts[j] < b.minX) b.minX = verts[j];
+        if (verts[j] > b.maxX) b.maxX = verts[j];
+        if (verts[j + 1] < b.minY) b.minY = verts[j + 1];
+        if (verts[j + 1] > b.maxY) b.maxY = verts[j + 1];
+      }
+      items.push(b);
+      if (b.minX < raw.minX) raw.minX = b.minX;
+      if (b.maxX > raw.maxX) raw.maxX = b.maxX;
+      if (b.minY < raw.minY) raw.minY = b.minY;
+      if (b.maxY > raw.maxY) raw.maxY = b.maxY;
+    }
+  });
+  if (!items.length) return null;
+  var rawW = raw.maxX - raw.minX, rawH = raw.maxY - raw.minY;
+  var N = 64;
+  var gw = rawW / N || 1, gh = rawH / N || 1;
+  var grid = new Float64Array(N * N);
+  for (var k = 0; k < items.length; k++) {
+    var bb = items[k];
+    var cx = (bb.minX + bb.maxX) / 2, cy = (bb.minY + bb.maxY) / 2;
+    var gx = Math.min(N - 1, Math.max(0, Math.floor((cx - raw.minX) / gw)));
+    var gy = Math.min(N - 1, Math.max(0, Math.floor((cy - raw.minY) / gh)));
+    grid[gy * N + gx] += Math.max(1, (bb.maxX - bb.minX) * (bb.maxY - bb.minY));
+  }
+  var maxCell = 0;
+  for (var v = 0; v < grid.length; v++) if (grid[v] > maxCell) maxCell = grid[v];
+  if (!maxCell) return null;
+  var threshold = maxCell * 0.02;
+  var fminX = raw.maxX, fmaxX = raw.minX, fminY = raw.maxY, fmaxY = raw.minY, kept = 0;
+  for (var gy2 = 0; gy2 < N; gy2++) {
+    for (var gx2 = 0; gx2 < N; gx2++) {
+      if (grid[gy2 * N + gx2] >= threshold) {
+        kept++;
+        if (raw.minX + gx2 * gw < fminX) fminX = raw.minX + gx2 * gw;
+        if (raw.minX + (gx2 + 1) * gw > fmaxX) fmaxX = raw.minX + (gx2 + 1) * gw;
+        if (raw.minY + gy2 * gh < fminY) fminY = raw.minY + gy2 * gh;
+        if (raw.minY + (gy2 + 1) * gh > fmaxY) fmaxY = raw.minY + (gy2 + 1) * gh;
+      }
+    }
+  }
+  var fW = fmaxX - fminX, fH = fmaxY - fminY;
+  var ratioW = fW / rawW, ratioH = fH / rawH;
+  if (!kept || ratioW > 0.55 || ratioH > 0.55 || ratioW < 0.08 || ratioH < 0.08) return null;
+  var padX = fW * 0.15, padY = fH * 0.15;
+  return { minX: fminX - padX, maxX: fmaxX + padX, minY: fminY - padY, maxY: fmaxY + padY };
+}
+
+function denseAreaFrame() {
+  // 面积过滤取景：保留面积 ≤ 最大附件 40% 的部件（跨所有层），滤掉超大背景/云朵。
+  // 返回 null 表示不适用（内容未被撑爆），调用方回退常规逻辑。
+  var raw = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+  var items = [];
+  skeletons.forEach(function (l) {
+    for (var i = 0; i < l.skeleton.slots.length; i++) {
+      var slot = l.skeleton.slots[i], att = slot.getAttachment();
+      if (!att) continue;
+      if (slot.color && slot.color.a < 0.01) continue;
+      if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+      if (isBgPanelSlot(slot)) continue; // 全屏背景网格/黑边面板不参与取景
+      var isRegion = att instanceof spine.RegionAttachment;
+      var isMesh = att instanceof spine.MeshAttachment;
+      if (!isRegion && !isMesh) continue;
+      var len = isRegion ? 8 : att.worldVerticesLength;
+      if (!len) continue;
+      var verts = spine.Utils.newFloatArray(len);
+      if (isRegion) att.computeWorldVertices(slot, verts, 0, 2);
+      else att.computeWorldVertices(slot, 0, len, verts, 0, 2);
+      var b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+      for (var j = 0; j < len; j += 2) {
+        if (verts[j] < b.minX) b.minX = verts[j];
+        if (verts[j] > b.maxX) b.maxX = verts[j];
+        if (verts[j + 1] < b.minY) b.minY = verts[j + 1];
+        if (verts[j + 1] > b.maxY) b.maxY = verts[j + 1];
+      }
+      items.push(b);
+      if (b.minX < raw.minX) raw.minX = b.minX;
+      if (b.maxX > raw.maxX) raw.maxX = b.maxX;
+      if (b.minY < raw.minY) raw.minY = b.minY;
+      if (b.maxY > raw.maxY) raw.maxY = b.maxY;
+    }
+  });
+  if (!items.length) return null;
+  var rawW = raw.maxX - raw.minX, rawH = raw.maxY - raw.minY;
+  var areas = items.map(function (b) { return (b.maxX - b.minX) * (b.maxY - b.minY); });
+  var maxA = Math.max.apply(null, areas);
+  // 最大附件本身就占满画面（无超大背景）时不适用
+  if (maxA >= rawW * rawH * 0.8) return null;
+  var keep = items.filter(function (b, i) { return areas[i] <= maxA * 0.4; });
+  if (!keep.length) return null;
+  // 在过滤后的集合上再做一次网格密度裁剪：滤掉散落的浪花/骷髅/云朵等
+  // 分散装饰（如 DEAD MASTER·战士的小憩），把取景收到角色主体。
+  var N = 64;
+  var gw = rawW / N || 1, gh = rawH / N || 1;
+  var grid = new Float64Array(N * N);
+  for (var k = 0; k < keep.length; k++) {
+    var bb = keep[k];
+    var cx = (bb.minX + bb.maxX) / 2, cy = (bb.minY + bb.maxY) / 2;
+    var gx = Math.min(N - 1, Math.max(0, Math.floor((cx - raw.minX) / gw)));
+    var gy = Math.min(N - 1, Math.max(0, Math.floor((cy - raw.minY) / gh)));
+    grid[gy * N + gx] += Math.max(1, (bb.maxX - bb.minX) * (bb.maxY - bb.minY));
+  }
+  var maxCell = 0;
+  for (var v = 0; v < grid.length; v++) if (grid[v] > maxCell) maxCell = grid[v];
+  if (!maxCell) return null;
+  var threshold = maxCell * 0.02;
+  var fminX = raw.maxX, fmaxX = raw.minX, fminY = raw.maxY, fmaxY = raw.minY, keptCells = 0;
+  for (var gy2 = 0; gy2 < N; gy2++) {
+    for (var gx2 = 0; gx2 < N; gx2++) {
+      if (grid[gy2 * N + gx2] >= threshold) {
+        keptCells++;
+        if (raw.minX + gx2 * gw < fminX) fminX = raw.minX + gx2 * gw;
+        if (raw.minX + (gx2 + 1) * gw > fmaxX) fmaxX = raw.minX + (gx2 + 1) * gw;
+        if (raw.minY + gy2 * gh < fminY) fminY = raw.minY + gy2 * gh;
+        if (raw.minY + (gy2 + 1) * gh > fmaxY) fmaxY = raw.minY + (gy2 + 1) * gh;
+      }
+    }
+  }
+  var fW = fmaxX - fminX, fH = fmaxY - fminY;
+  // 网格保留太少（内容过于稀疏）或过滤后仍占满 90%+：回退原逻辑
+  if (!keptCells || fW >= rawW * 0.9 || fH >= rawH * 0.9) return null;
+  var padX = fW * 0.12, padY = fH * 0.12;
+  return { minX: fminX - padX, maxX: fmaxX + padX, minY: fminY - padY, maxY: fmaxY + padY };
+}
+
+function computeBounds() {
+  // 与预览 SpinePreview.vue 完全一致的取景链：
+  // 背景层基准（有 B/_B/bg/_bg 后缀时）→ contentFrame（网格密度）
+  // → denseAreaFrame（面积过滤）→ 逐层兜底。
+  // 缺第二道时，背景被云朵/大面积装饰撑爆的皮肤（战士的小憩等）会取到巨大
+  // 包围盒，导出后角色明显偏小——这就是“预览合适、壁纸偏小”的根因。
+  if (boundsCache) return boundsCache;
+  // 独立背景图（Ultimate 正方形背景图等）：以背景图世界尺寸为取景框，
+  // 角色在背景内自然显示、不填满整个画面（与预览 SpinePreview.vue 一致）。
+  // 背景世界尺寸与 drawBgImage 一致：cover 铺满角色取景框 + 15% 外扩，
+  // 中心对齐角色中心——cover 保证背景必然包含角色，框背景不会裁角色。
+  if (bgImages.length && bgImages[0].width > 0) {
+    var bgImg = bgImages[0];
+    var skelPer = [];
+    skeletons.forEach(function (l) {
+      var b = layerBounds(l);
+      if (isFinite(b.minX)) skelPer.push(b);
+    });
+    if (skelPer.length) {
+      var cMinX = Math.min.apply(null, skelPer.map(function (b) { return b.minX; }));
+      var cMaxX = Math.max.apply(null, skelPer.map(function (b) { return b.maxX; }));
+      var cMinY = Math.min.apply(null, skelPer.map(function (b) { return b.minY; }));
+      var cMaxY = Math.max.apply(null, skelPer.map(function (b) { return b.maxY; }));
+      var bw = cMaxX - cMinX, bh = cMaxY - cMinY;
+      if (bw > 0 && bh > 0) {
+        var bgScale = (Math.max(bw / bgImg.width, bh / bgImg.height)) * 1.15;
+        var bgW = bgImg.width * bgScale, bgH = bgImg.height * bgScale;
+        var ccx = (cMinX + cMaxX) / 2, ccy = (cMinY + cMaxY) / 2;
+        boundsCache = {
+          minX: ccx - bgW / 2, maxX: ccx + bgW / 2,
+          minY: ccy - bgH / 2, maxY: ccy + bgH / 2,
+        };
+        return boundsCache;
+      }
+    }
+  }
+  // 有显式背景层时以背景层为取景基准（背景定义整幅场景）；
+  // 护栏：背景面积超过主体层 8 倍时视为装饰性大背景，回退常规取景。
+  var bgLayers = skeletons.filter(isBgLayer);
+  if (bgLayers.length) {
+    var bgFrame = layerBounds(bgLayers[0]);
+    var nonBg = [];
+    skeletons.forEach(function (l) {
+      if (!isBgLayer(l)) {
+        var b = layerBounds(l);
+        if (isFinite(b.minX)) nonBg.push(b);
+      }
+    });
+    if (isFinite(bgFrame.minX) && nonBg.length) {
+      var bgArea = (bgFrame.maxX - bgFrame.minX) * (bgFrame.maxY - bgFrame.minY) || 1;
+      var maxOther = Math.max.apply(null, nonBg.map(function (b) {
+        return (b.maxX - b.minX) * (b.maxY - b.minY);
+      }));
+      // 护栏：背景面积在主体层的 [0.15, 8] 倍之间才适用背景取景。
+      // 过小（装饰性小背景）会把人物撑爆裁切；过大（云朵类大背景）会重新
+      // 把角色挤小，两种情况都回退常规取景。
+      var bgW = bgFrame.maxX - bgFrame.minX;
+      var bgH = bgFrame.maxY - bgFrame.minY;
+      // 背景必须横构图（宽≥高）：竖构图背景（如 华甲_2 的窄背板）是装饰
+      // 性布景，按它取景会裁掉人物并留大片黑边。
+      if (bgArea >= maxOther * 0.15 && bgArea <= maxOther * 8 && bgW >= bgH) {
+        var padX = (bgFrame.maxX - bgFrame.minX) * 0.08;
+        var padY = (bgFrame.maxY - bgFrame.minY) * 0.08;
+        boundsCache = {
+          minX: bgFrame.minX - padX, maxX: bgFrame.maxX + padX,
+          minY: bgFrame.minY - padY, maxY: bgFrame.maxY + padY,
+        };
+        return boundsCache;
+      }
+    }
+  }
+  var dense = contentFrame();
+  if (dense) { boundsCache = dense; return boundsCache; }
+  var areaFrame = denseAreaFrame();
+  if (areaFrame) { boundsCache = areaFrame; return boundsCache; }
+  var per = [];
+  skeletons.forEach(function (l) {
+    l.skeleton.updateWorldTransform();
+    var b = layerBounds(l);
+    if (isFinite(b.minX)) per.push(b);
+  });
+  if (!per.length) { boundsCache = { minX: -1, maxX: 1, minY: -1, maxY: 1 }; return boundsCache; }
+  var small = per[0];
+  for (var k = 1; k < per.length; k++) {
+    var a = (per[k].maxX - per[k].minX) * (per[k].maxY - per[k].minY);
+    var ra = (small.maxX - small.minX) * (small.maxY - small.minY);
+    if (a < ra) small = per[k];
+  }
+  var baseArea = (small.maxX - small.minX) * (small.maxY - small.minY) || 1;
+  var frame = per.filter(function (b) {
+    return (b.maxX - b.minX) * (b.maxY - b.minY) <= baseArea * 4;
+  });
+  boundsCache = {
+    minX: Math.min.apply(null, frame.map(function (b) { return b.minX; })),
+    maxX: Math.max.apply(null, frame.map(function (b) { return b.maxX; })),
+    minY: Math.min.apply(null, frame.map(function (b) { return b.minY; })),
+    maxY: Math.max.apply(null, frame.map(function (b) { return b.maxY; })),
+  };
+  return boundsCache;
+}
+
+function applyLayout() {
+  if (!skeletons.length || !renderer) return;
+  var a = WallpaperLayout.anchor(ALIGNMENT);
+  var cam = WallpaperLayout.spineCamera(computeBounds(), canvas.clientWidth, canvas.clientHeight, {
+    scale: SCALE,
+    offsetX: OFFSET_X,
+    offsetY: OFFSET_Y,
+    alignX: a.x,
+    alignY: a.y
+  });
+  renderer.camera.zoom = cam.zoom;
+  renderer.camera.position.x = cam.x;
+  renderer.camera.position.y = cam.y;
+  renderer.camera.position.z = 0;
+}
+
+function render() {
+  // 防呆：任何一帧抛错都不能断掉 rAF 链（否则壁纸画面静默定格）。
+  // 某层动画/绘制异常只跳过该层并记录，整帧循环继续。
+  try {
+    var now = performance.now() / 1000;
+    var delta = Math.min(0.1, now - lastFrame);
+    lastFrame = now;
+    if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {
+      canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      renderer.camera.setViewport(canvas.width, canvas.height);
+      applyLayout();
+    }
+    skeletons.forEach(function (l) {
+      try {
+        l.state.update(delta);
+        l.state.apply(l.skeleton);
+        l.skeleton.updateWorldTransform();
+      } catch (e) { console.error("[spine] 层动画异常: " + (l.name || "") + " " + (e && e.message)); }
+    });
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    renderer.begin();
+    // 独立背景图：画在角色骨架下面（预览 SpinePreview.vue 的 clearRenderFrame 一致）
+    if (bgImagesReady && bgImages.length) {
+      for (var bi = 0; bi < bgImages.length; bi++) drawBgImage(bgImages[bi]);
+    }
+    renderOrder().forEach(function (l) { renderer.drawSkeleton(l.skeleton, true); });
+    renderer.end();
+    // BD2 互动调试层已随分区命中一起移除（顺序播放不需要区域显示）
+  } catch (e) {
+    console.error("[spine] 渲染帧异常: " + (e && e.message || e));
+  }
+  requestAnimationFrame(render);
+}
+
+// WE 加载时会先推送一次“全部属性”（含 config.json 里按路径存的历史覆盖值）。
+// 该覆盖值可能来自用户在 WE 里手动拖滑块，也可能来自编辑器导入误写；无论哪种，
+// — 版式（SCALE/OFFSET/ALIGNMENT）一律跳过，以导出内联值为准（保证预览=导出一致）；
+// — 用户偏好开关（语音/开场/互动/显示交互区域）首推时采纳并实时切换；
+// — 动画切换：若 WE 里保存过用户选择则恢复它，否则保持导出默认动画。
+var _initialPropsApplied = false;
+window.wallpaperPropertyListener = {
+  applyUserProperties: function (properties) {
+    try {
+      if (!_initialPropsApplied) {
+        _initialPropsApplied = true;
+        // 首推：版式跳过（保持 SCALE/OFFSET/ALIGNMENT 导出内联值）；用户偏好采纳 + 动画恢复
+        if (properties.voice) {
+          voiceRuntimeOn = properties.voice.value === true || properties.voice.value === 1;
+          if (!voiceRuntimeOn && _voiceAudio) { _voiceAudio.pause(); _voiceAudio = null; }
+        }
+        if (properties.playintro) INTRO_ON = properties.playintro.value === true || properties.playintro.value === 1;
+        if (properties.interact) interactOn = properties.interact.value === true || properties.interact.value === 1;
+        if (properties.showhitareas) {
+          hitAreasRuntimeOn = properties.showhitareas.value === true || properties.showhitareas.value === 1;
+          syncHitAreasOverlay();
+        }
+        if (skeletons.length) applyLayout();
+        return;
+      }
+      if (properties.scalectrl) SCALE = properties.scalectrl.value;
+      if (properties.offsetx) OFFSET_X = properties.offsetx.value;
+      if (properties.offsety) OFFSET_Y = properties.offsety.value;
+      // WE combo 推送 value：新版为字符串（对齐名），旧版为下标（数字），都兼容
+      if (properties.alignment) {
+        var av = properties.alignment.value;
+        if (typeof av === "number") ALIGNMENT = WallpaperLayout.ALIGN_ORDER[av] || ALIGNMENT;
+        else if (typeof av === "string") ALIGNMENT = av;
+      }
+      // ===== WE 面板开关实时切换（与 L2D 一致）=====
+      // 互动语音：关→停当前语音并不再播放
+      if (properties.voice) {
+        voiceRuntimeOn = properties.voice.value === true || properties.voice.value === 1;
+        if (!voiceRuntimeOn && _voiceAudio) { _voiceAudio.pause(); _voiceAudio = null; }
+      }
+      // 开场动画：切回 normal 待机后是否重播 login 由下一次加载决定，运行时不打断
+      if (properties.playintro) INTRO_ON = properties.playintro.value === true || properties.playintro.value === 1;
+      // 互动：关→点击不再触发互动动画
+      if (properties.interact) interactOn = properties.interact.value === true || properties.interact.value === 1;
+      // BD2 互动区域调试层：实时显隐
+      if (properties.showhitareas) {
+        hitAreasRuntimeOn = properties.showhitareas.value === true || properties.showhitareas.value === 1;
+        syncHitAreasOverlay();
+      }
+      if (skeletons.length) applyLayout();
+    } catch (e) {}
+  }
+};
+
+window.__captureCanvasDataURL = function () {
+  try { return canvas.toDataURL("image/png"); } catch (e) { return ""; }
+};
+
+// ===== Spine 互动（drag 系拖拽状态机 + touch 系点击互动）=====
+// drag 系（有 drag/ex 动画）：normal →(拖拽)→ drag →(播完)→ ex 循环 →(再拖)→
+//   drag_ex →(播完)→ normal。
+// touch 系（有 login/touch_* 动画，如 携心夜烛 feiteliedadi_5）：开场 login
+//   播一次回 normal；点击轮换播 touch_body/head/special 一次回 normal。
+var interactState = "normal"; var _dragSeq = 0; // normal | drag | ex | drag_ex | login
+var interactEnabled = false;
+var dragging = false;
+var TOUCH_ANIMS = ["touch_body", "touch_head", "touch_special"];
+var _touchIndex = -1;
+// 官方互动规则（config_client）：按当前待机(idle)匹配规则 → 播 action 一次 →
+// 切 change_idle 循环。如 携心夜烛：touch_special 播完进 touch_special_normal
+// 特殊待机循环，再点击播 touch_special_2 后回 normal。数据由导出器注入。
+var INTERACT_RULES = {{INTERACT_RULES_JSON}};
+var currentIdle = "normal"; // 当前待机动画（规则匹配键）
+function animNames0() {
+  if (!skeletons.length || !skeletons[0].data) return [];
+  return skeletons[0].data.animations.map(function (a) { return a.name; });
+}
+function hasAnim0(name) {
+  var names = animNames0();
+  if (names.indexOf(name) >= 0) return true;
+  // 前缀匹配：drag → drag1/drag2/drag3（足尖弓矢等动画带数字后缀）
+  for (var i = 0; i < names.length; i++) if (names[i].indexOf(name) === 0) return true;
+  return false;
+}
+function isInteractiveSkin() {
+  var names = animNames0();
+  if (hasAnim0("drag") && (names.indexOf("ex") >= 0 || names.some(function (a) { return a.indexOf("ex") === 0; }))) return true;
+  for (var i = 0; i < TOUCH_ANIMS.length; i++) if (names.indexOf(TOUCH_ANIMS[i]) >= 0) return true;
+  return names.indexOf("login") >= 0;
+}
+function hitWorldBox(h) {
+  var rp = h.rootPosition || [0, 0];
+  var rs = h.rootSize || [1, 1];
+  var pos = h.position || [0, 0];
+  var size = h.size || [0, 0];
+  var rootMinX = rp[0] - rs[0] / 2;
+  var rootMaxX = rp[0] + rs[0] / 2;
+  var rootMaxY = rp[1] + rs[1] / 2;
+  var cx = (rootMinX + rootMaxX) / 2 + pos[0];
+  var cy = rootMaxY - rs[1] / 2 + pos[1];
+  var w = size[0], hh = size[1];
+  return { minX: cx - w / 2, maxX: cx + w / 2, minY: cy - hh / 2, maxY: cy + hh / 2 };
+}
+function screenToWorld(px, py) {
+  var cw = canvas.clientWidth || 1;
+  var ch = canvas.clientHeight || 1;
+  var cam = renderer.camera;
+  var z = cam.zoom || 1;
+  return { x: (px - cw / 2) * z + cam.position.x, y: (ch / 2 - py) * z + cam.position.y };
+}
+// 点击位置命中的 hitArea 名（数字表情区 → "1"/"3"；拖拽区 → drag/random；无 → null）
+function hitNameAt(clientX, clientY) {
+  if (!HIT_AREAS || !HIT_AREAS.length) return null;
+  var r = canvas.getBoundingClientRect();
+  var w = screenToWorld(clientX - r.left, clientY - r.top);
+  for (var i = 0; i < HIT_AREAS.length; i++) {
+    var b = hitWorldBox(HIT_AREAS[i]);
+    if (w.x >= b.minX && w.x <= b.maxX && w.y >= b.minY && w.y <= b.maxY) return HIT_AREAS[i].name;
+  }
+  return null;
+}
+function dragSeqOf(name) {
+  var m = /^(?:drag_ex|drag|ex)(\d+)/.exec(name || "");
+  return m ? parseInt(m[1], 10) : 0;
+}
+function playInteractAnim(name, loop) {
+  var first = null;
+  for (var i = 0; i < skeletons.length; i++) if (skeletons[i].skeleton) { first = skeletons[i]; break; }
+  if (!first) return;
+  // 前缀枚举：精确名优先，否则所有 name 开头动画（drag → drag1/drag2/drag3）——
+  var list = [];
+  var hasExact = false;
+  for (var a = 0; a < first.data.animations.length; a++) {
+    if (first.data.animations[a].name === name) { hasExact = true; break; }
+  }
+  if (hasExact) list = [name];
+  else {
+    for (var b = 0; b < first.data.animations.length; b++) {
+      var nm = first.data.animations[b].name;
+      if (nm.indexOf(name) === 0 && nm.indexOf(name + '_') !== 0) list.push(nm);
+    }
+  }
+  if (!list.length) return;
+  var target = list[Math.floor(Math.random() * list.length)];
+  // 序号对应：drag 选变体记序号；ex / drag_ex 阶段优先选同序号变体（drag1→ex1s、drag2→ex2f）
+  if (/^drag/.test(name) && !/^drag_ex/.test(name)) {
+    _dragSeq = dragSeqOf(target);
+  } else if (/^ex/.test(name) && !/^drag_ex/.test(name) && _dragSeq > 0) {
+    var match = list.filter(function (an) { return dragSeqOf(an) === _dragSeq; });
+    if (match.length) target = match[Math.floor(Math.random() * match.length)];
+  } else if (/^drag_ex/.test(name) && _dragSeq > 0) {
+    var match2 = list.filter(function (an) { return dragSeqOf(an) === _dragSeq; });
+    if (match2.length) target = match2[Math.floor(Math.random() * match2.length)];
+  }
+  skeletons.forEach(function (l) {
+    if (!l.skeleton) return;
+    if (!l.data.animations.some(function (a) { return a.name === target; })) return;
+    // 表情叠加修复：清 track1 后复位骨架到 setup pose，还原表情切走的附件
+    l.state.clearTrack(1);
+    l.skeleton.setToSetupPose();
+    l.skeleton.updateWorldTransform();
+    l.state.setAnimation(0, target, loop);
+  });
+}
+function enterInteract(state) {
+  if (interactState === state) return;
+  interactState = state;
+  switch (state) {
+    case "drag": playInteractAnim("drag", false); break;
+    case "ex": playInteractAnim("ex", true); break;
+    case "drag_ex": playInteractAnim("drag_ex", false); break;
+    case "normal": playInteractAnim("normal", true); break;
+  }
+}
+function onInteractComplete(entry) {
+  if (!entry || entry.trackIndex !== 0) return;
+  if (entry.loop) return; // 循环动画每圈 complete 不处理（ex/normal 由 spine 自动续圈）
+  var name = entry.animation ? entry.animation.name : "";
+  // BD2 mix/motion 整段演出播完 → 平滑淡入待机循环（react.idle 已在触发时记入 currentIdle）
+  if (_bd2FullPlaying && /^(mix\d+_|motion\d)/.test(name)) {
+    _bd2FullPlaying = false;
+    BD2Interact.playFull(skeletons, currentIdle, true, undefined, { cleanSwitch: true });
+    return;
+  }
+  if (interactState === "drag") enterInteract("ex");
+  else if (interactState === "drag_ex") enterInteract("normal");
+  else if (/^touch_|^login$/.test(name)) playInteractAnim(currentIdle, true);
+}
+function startInteractDrag() {
+  if (!interactEnabled) return;
+  if (interactState === "ex" || interactState === "drag_ex") enterInteract("drag_ex");
+  else enterInteract("drag");
+}
+// 皮肤是否有数字表情动画（duration=0 的 AttachmentTimeline 表情集）
+function hasExpressions() {
+  var sd = skeletons.length && skeletons[0].data ? skeletons[0].data : null;
+  if (!sd) return false;
+  for (var k = 0; k < sd.animations.length; k++) {
+    var a = sd.animations[k];
+    if (/^\d+$/.test(a.name) && a.duration <= 0) return true;
+  }
+  return false;
+}
+// 纯表情皮肤：点击循环切换全部数字表情（1→2→…→无表情→1）
+var _exprIndex = -1;
+function cycleExpression() {
+  var sd = skeletons.length && skeletons[0].data ? skeletons[0].data : null;
+  if (!sd) return;
+  var exprs = [];
+  for (var k = 0; k < sd.animations.length; k++) {
+    if (/^\d+$/.test(sd.animations[k].name) && sd.animations[k].duration <= 0) exprs.push(sd.animations[k].name);
+  }
+  if (!exprs.length) return;
+  _exprIndex = (_exprIndex + 1) % (exprs.length + 1); // +1 = 循环回"无表情"
+  skeletons.forEach(function (l) {
+    var cur = l.state.getCurrent(0);
+    if (!cur) {
+      var def = pickAnim(l.data);
+      if (def) l.state.setAnimation(0, def, true);
+    }
+    // 先清 track1（把上一张表情切过的附件全部还原），避免新表情叠在旧表情残留上
+    l.state.clearTrack(1);
+    if (_exprIndex < exprs.length) l.state.setAnimation(1, exprs[_exprIndex], false);
+  });
+}
+
+// touch 系：点击轮换播 touch 动画（body → head → special），播完自动回 normal
+function cycleTouchInteract() {
+  var names = animNames0();
+  var order = [];
+  for (var i = 0; i < TOUCH_ANIMS.length; i++) if (names.indexOf(TOUCH_ANIMS[i]) >= 0) order.push(TOUCH_ANIMS[i]);
+  if (!order.length) return;
+  _touchIndex = (_touchIndex + 1) % order.length;
+  playInteractAnim(order[_touchIndex], false);
+}
+
+// ===== 官方互动规则状态机 =====
+// 按 hit 名（或当前待机）匹配 config_client 规则 → 播 action 一次 → 切 change_idle
+function findRuleByHit(hitName) {
+  for (var i = 0; i < INTERACT_RULES.length; i++) {
+    var r = INTERACT_RULES[i];
+    if (r && r.hit === hitName && r.action && r.click !== false) return r;
+  }
+  return null;
+}
+function playRuleAction(hitName) {
+  if (!INTERACT_RULES.length) return false;
+  var rule = null;
+  if (hitName) rule = findRuleByHit(hitName);
+  if (!rule) {
+    // 按当前待机匹配；无则用 is_default
+    for (var i = 0; i < INTERACT_RULES.length; i++) {
+      var r = INTERACT_RULES[i];
+      if (r && r.idle === currentIdle && r.click !== false && r.action && hasAnim0(r.action)) { rule = r; break; }
+    }
+    if (!rule) {
+      for (var j = 0; j < INTERACT_RULES.length; j++) {
+        var rd = INTERACT_RULES[j];
+        if (rd && rd.is_default && rd.action && hasAnim0(rd.action)) { rule = rd; break; }
+      }
+    }
+  }
+  if (!rule) return false;
+  var action = rule.action;
+  if (!hasAnim0(action)) return false;
+  currentIdle = rule.change_idle || "normal"; // 动作播完进入的新待机
+  playInteractAnim(action, false);
+  spinePlayVoice(/^touch/.test(action) ? action : null);
+  return true;
+}
+
+// ===== 互动语音（按部位/动作名选对应语音）=====
+// 语音文件由导出器复制到 assets/voice/{cue}.wav，配置在 VOICE_JSON.pick
+var _voiceAudio = null;
+// 动作名 → 语音 pick 键（touch_special → touch_2 特殊、touch_head → 摸头、touch_body/touch_1）
+function voiceCueFor(actionName) {
+  var pick = VOICE_JSON ? (VOICE_JSON.pick || {}) : {};
+  if (/special/.test(actionName)) return pick.touch_2 || pick.touch_1 || pick.touch_head || null;
+  if (/head/.test(actionName)) return pick.touch_head || pick.touch_1 || pick.touch_2 || null;
+  return pick.touch_1 || pick.touch_2 || pick.touch_head || null;
+}
+function spinePlayVoice(actionName) {
+  if (!VOICE_ON || !VOICE_JSON) return;
+  if (!voiceRuntimeOn) return; // WE 面板语音开关关闭
+  var cue = voiceCueFor(actionName || "");
+  if (!cue) return;
+  try {
+    // 防重复：先停掉上一个语音（连续点击不叠加、不重复播放）
+    if (_voiceAudio) { _voiceAudio.pause(); _voiceAudio = null; }
+    var a = new Audio("assets/voice/" + cue + ".wav");
+    a.volume = 0.9;
+    a.play().catch(function () { if (_voiceAudio === a) _voiceAudio = null; });
+    _voiceAudio = a;
+  } catch (e) { /* 无语音不影响互动 */ }
+}
+
+// 纯表情皮肤点击切表情时：随机播一句该船的触摸/摸头语音作点击反馈
+function spinePlayVoiceRandom() {
+  if (!VOICE_ON || !VOICE_JSON) return;
+  if (!voiceRuntimeOn) return;
+  var pick = VOICE_JSON.pick || {};
+  var cues = [pick.touch_head, pick.touch_1, pick.touch_2].filter(Boolean);
+  if (!cues.length) return;
+  var cue = cues[Math.floor(Math.random() * cues.length)];
+  try {
+    if (_voiceAudio) { _voiceAudio.pause(); _voiceAudio = null; }
+    var a = new Audio("assets/voice/" + cue + ".wav");
+    a.volume = 0.9;
+    a.play().catch(function () { if (_voiceAudio === a) _voiceAudio = null; });
+    _voiceAudio = a;
+  } catch (e) { /* 无语音不影响互动 */ }
+}
+
+// BD2 mood 互动引擎用：按具体 cue 名直接播放（cue 已由引擎从 VOICE_JSON.moods 挑出）
+function spinePlayCue(cue) {
+  if (!VOICE_ON || !VOICE_JSON || !cue) return;
+  if (!voiceRuntimeOn) return;
+  try {
+    if (_voiceAudio) { _voiceAudio.pause(); _voiceAudio = null; }
+    var a = new Audio("assets/voice/" + cue + ".wav");
+    a.volume = 0.9;
+    a.play().catch(function () { if (_voiceAudio === a) _voiceAudio = null; });
+    _voiceAudio = a;
+  } catch (e) { /* 无语音不影响互动 */ }
+}
+
+
+// ===== WE 面板开关运行时状态（初始值 = 导出时的选项）=====
+var voiceRuntimeOn = VOICE_ON;   // 互动语音（面板开关实时切换）
+var interactOn = INTERACT_ON;    // 互动（点击/拖拽触发动画反应）
+var hitAreasRuntimeOn = false;   // BD2 互动区域调试层已移除（顺序播放无需分区显示）
+
+// ===== BD2 互动（单源引擎 bd2-interact.js，与预览端同一份代码） =====
+// 点击任意位置即触发：face 皮肤叠加 _faceN 表情；mix 皮肤沿官方顺序序列推进
+// （mixN 步进回 idleN，章末 motion 桥切 idleN+1）+ Int_{Mood} 情绪轮换语音 + 粒子特效。
+var _bd2Profile = null;      // detect(animations) 结果
+var _bd2MotionCdUntil = 0;   // 整身动作冷却（motion/mix）
+var _bd2VoiceAt = 0;         // 语音节流
+var _bd2Overlay = null;      // 兼容占位（历史 WE 项目可能推送 showhitareas 属性）
+var _bd2FullPlaying = false; // mix/motion 整段演出播放中（complete 回待机）
+
+function _bd2Ready() {
+  if (!_bd2Profile) {
+    var l0 = skeletons.find(function (l) { return l.skeleton; });
+    if (!l0 || !window.BD2Interact) return null;
+    _bd2Profile = BD2Interact.detect(l0.data.animations.map(function (a) { return a.name; }));
+    BD2Interact.resetMix(); // 新皮肤 mix 序列从头开始
+  }
+  return _bd2Profile.bd2 ? _bd2Profile : null;
+}
+
+// 每次交互重建 zones：读取的是当前姿态的骨骼世界坐标（锚点天然跟手）
+function _bd2Zones() {
+  var l0 = skeletons.find(function (l) { return l.skeleton; });
+  if (!l0) return null;
+  return { layer: l0, skel: l0.skeleton, zones: BD2Interact.buildZones(l0.skeleton) };
+}
+
+// 屏幕坐标（CSS px，canvas 相对）→ 世界坐标：委托现有 screenToWorld 实现
+function _bd2WorldPt(clientX, clientY) {
+  var rect = canvas.getBoundingClientRect();
+  return screenToWorld(clientX - rect.left, clientY - rect.top);
+}
+
+// screenToWorld 的逆变换（orthographic camera，见其实现的轴与缩放推导）
+function worldToScreen(renderer_, hostW, hostH, x, y) {
+  var cam = renderer_.camera;
+  var z = cam.zoom || 1;
+  return {
+    x: (x - cam.position.x) / z + hostW / 2,
+    y: hostH / 2 - (y - cam.position.y) / z,
+  };
+}
+
+function bd2HandleTap(e) {
+  // 每点必触发：连续点击会中断当前 mix 演出，硬切到下一段互动（playFull cleanSwitch 硬切）。
+  var profile = _bd2Ready();
+  if (!profile) return false;
+  // 顺序播放模型：点击画布任意位置都触发，位置不再参与决策。
+  // zones/wp 仅作为兼容参数传入（引擎内部不使用）。
+  var zc = _bd2Zones();
+  var wp = zc ? _bd2WorldPt(e.clientX, e.clientY) : { x: 0, y: 0 };
+  var react = BD2Interact.decide(profile, zc ? zc.zones : [], null, wp,
+                                 { motionCooldownUntil: _bd2MotionCdUntil });
+  if (!react) return false;
+  if (react.mode === "overlay") {
+    // 第一代：表情叠加 track1（_faceN 是表情时间线；track0 的 idle 不打断）
+    for (var i = 0; i < skeletons.length; i++) {
+      var l = skeletons[i];
+      if (!l.skeleton) continue;
+      var cur = l.state.getCurrent(0);
+      if (!cur) { var def = pickAnim(l.data); if (def) l.state.setAnimation(0, def, true); }
+      l.state.clearTrack(1);
+      if (l.data.animations.some(function (a) { return a.name === react.anim; })) {
+        l.state.setAnimation(1, react.anim, false);
+      }
+    }
+    if (react.motion && hasAnim0("motion")) {
+      BD2Interact.playFull(skeletons, "motion", false, undefined, { cleanSwitch: true });
+      interactState = "normal";
+      currentIdle = "normal";
+      _bd2MotionCdUntil = Date.now() + 12000;
+    }
+  } else {
+    // 第二代（mix/motion 演出）：整段走 track0 单发，播完 complete 回待机循环。
+    // playFull 交叉淡化进出，避免硬切闪帧卡顿
+    if (!BD2Interact.playFull(skeletons, react.anim, false, undefined, { cleanSwitch: true })) {
+      // 极端兜底：当前层缺该动画则退回待机循环（理论上 decide 已筛选过）
+      playInteractAnim(currentIdle || "idle1", true);
+    }
+    interactState = "normal";
+    currentIdle = react.idle || "idle1";
+    _bd2FullPlaying = true;
+    _bd2MotionCdUntil = Date.now() + 6000;
+  }
+  // 区域情绪 → 官方 Int 语音（moods 组池优先；600ms 节流）
+  var now = Date.now();
+  if (VOICE_ON && voiceRuntimeOn && now - _bd2VoiceAt > 600) {
+    var cue = null;
+    try { cue = BD2Interact.cueForMood((VOICE_JSON || {}).moods, react.zone.moods); } catch (err) {}
+    if (!cue && VOICE_JSON && VOICE_JSON.pick) {
+      cue = VOICE_JSON.pick.touch_1 || VOICE_JSON.pick.touch_head || VOICE_JSON.pick.touch_body || null;
+    }
+    if (cue) { spinePlayCue(cue); _bd2VoiceAt = now; }
+  }
+  // 点击特效：直接在鼠标落点（CSS 像素，相对 canvas）绽放
+  var rect = canvas.getBoundingClientRect();
+  var fxX = e.clientX - rect.left;
+  var fxY = e.clientY - rect.top;
+  var dprAdj = (canvas.clientWidth / rect.width) || 1;
+  BD2Interact.spawnEffect(canvas.parentElement, fxX / dprAdj, fxY / dprAdj, react.zone.moods[0]);
+  return true;
+}
+
+// 兼容占位：历史 WE 项目/属性面板可能推送 showhitareas，这里保持空实现
+function syncHitAreasOverlay() {}
+
+// 初始化互动：mousedown 无条件注册（纯表情皮肤点击切表情、互动皮肤拖拽触发
+// 反应动画都从这里走）；complete 监听同样无条件注册（login/touch 单次动画播完
+// 的回待机切换依赖它）。
+function initInteract() {
+  interactEnabled = isInteractiveSkin();
+  syncHitAreasOverlay();
+  skeletons.forEach(function (l) {
+    if (l.state) l.state.addListener({ complete: onInteractComplete });
+  });
+  canvas.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    // 互动开关关闭：不触发互动动画/语音
+    if (!interactOn) return;
+    dragging = true;
+    // ★ BD2 拟官方互动优先（idle/motion/_faceN 动画集）：分区命中 → 表情+语音+特效。
+    //   命中处理返回 false（非 bd2 皮肤或点击在角色框外）才落到旧分支。
+    if (bd2HandleTap(e)) return;
+    // 纯表情皮肤（无 drag/touch/login）：点击循环切换全部表情 + 随机互动语音
+    if (!isInteractiveSkin()) {
+      if (hasExpressions()) {
+        cycleExpression();
+        spinePlayVoiceRandom(); // 点击切表情时随机播一句该船触摸/摸头语音
+      }
+      return;
+    }
+    // ★ drag 皮肤：先按点击坐标命中面部表情区（数字 hitArea）→ 切表情；
+    //   命中其他/未命中 → 本地 drag 状态机（与预览端 hit-test 一致）。
+    var hasDragA = hasAnim0("drag"), hasExA = hasAnim0("ex");
+    if (hasDragA && hasExA) {
+      var hitName = hitNameAt(e.clientX, e.clientY);
+      if (hitName && /^\d+$/.test(hitName)) {
+        cycleExpression(); // 点脸（表情区）切换表情
+      } else {
+        startInteractDrag();
+        spinePlayVoice("touch_body");
+      }
+      return;
+    }
+    // 官方规则状态机：touch 系 skin 按当前 idle 匹配规则（无规则走下方回退）
+    if (playRuleAction(null)) return;
+    if (hasDragA) {
+      startInteractDrag();
+      spinePlayVoice("touch_body");
+    } else if (hasExpressions()) {
+      // 互动皮肤但命中不到规则：有表情则切表情
+      cycleExpression();
+    } else {
+      cycleTouchInteract();
+    }
+  });
+  window.addEventListener("mouseup", function () { dragging = false; });
+  // 若当前动画不是 normal（用户通过 WE 切了表情/动作），互动拖拽不打断
+  if (interactState === "normal") {
+    // 皮肤有 login 入场动画且开场动画开关开启时：开场播一次 login 再回 normal
+    //（login 完成后切回 normal 循环；若用户拖拽则互动状态机接管）。
+    // INTRO_ON=false（导出时关了开场动画）则直接 normal 待机。
+    if (hasAnim0("login") && INTRO_ON) {
+      interactState = "login";
+      currentIdle = "normal";
+      playInteractAnim("login", false);
+      skeletons.forEach(function (l) {
+        if (l.state) l.state.addListener({
+          complete: function (entry) {
+            if (entry && entry.trackIndex === 0 && interactState === "login") {
+              interactState = "normal";
+              playInteractAnim("normal", true);
+            }
+          }
+        });
+      });
+    } else {
+      playInteractAnim("normal", true);
+    }
+  }
+}
+
+
+
+function init() {
+  canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
+  gl = canvas.getContext("webgl", { alpha: true }) || canvas.getContext("experimental-webgl", { alpha: true });
+  if (!gl) { showError("WebGL not supported"); return; }
+  renderer = new spine.SceneRenderer(canvas, gl, false);
+  loadBgImages(); // 独立背景图与骨架层并行加载
+  for (var i = 0; i < LAYERS.length; i++) loadLayer(i);
+}
+window.addEventListener("resize", function () {
+  canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
+  if (renderer) { gl.viewport(0, 0, canvas.width, canvas.height); renderer.camera.setViewport(canvas.width, canvas.height); }
+  if (skeletons.length) applyLayout();
+});
+window.addEventListener("load", init);
+</script>
+</body>
+</html>

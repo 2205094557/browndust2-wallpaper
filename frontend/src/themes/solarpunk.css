@@ -1,0 +1,679 @@
+/* =========================================================
+   太阳朋克主题（Solarpunk）— body.theme-solarpunk 覆盖层
+   乐观生态未来 · 温暖浅色 #f0fdf4 / #fef3c7 ·
+   叶绿 / 金黄 / 天蓝 · 有机大圆角 rounded-2xl/3xl ·
+   柔和暖影 · 绿→琥珀渐变
+   覆盖：全局背景 / wc-btn 按钮体系 / 卡片 / 筛选胶囊 /
+   分段控件 / 开关行 / 图标按钮 / L2D 面板 / Naive 组件
+   ========================================================= */
+
+body.theme-solarpunk {
+  --paper: #f0fdf4;
+  --paper-2: #dcfce7;
+  --blue: #22c55e;
+  --cyan: #38bdf8;
+  --rose: #fbbf24;
+  --green: #4ade80;
+  --gold: #facc15;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --line: rgba(34, 197, 94, 0.25);
+  --shadow-soft: 0 4px 20px rgba(74, 222, 128, 0.2);
+  --shadow-hover: 0 10px 30px rgba(74, 222, 128, 0.3);
+  --font-serif: "Yuanti SC", "YouYuan", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-sans: "PingFang SC", "Yuanti SC", "Microsoft YaHei", sans-serif;
+}
+
+body.theme-solarpunk {
+  background: #f0fdf4;
+  color: #1f2937;
+}
+
+/* 全局背景：暖绿 + 金色阳光光晕 + 柔和颗粒 */
+body.theme-solarpunk .watercolor-bg {
+  background:
+    radial-gradient(38% 32% at 12% 16%, rgba(74, 222, 128, 0.2), transparent 65%),
+    radial-gradient(30% 28% at 88% 12%, rgba(251, 191, 36, 0.16), transparent 65%),
+    radial-gradient(34% 30% at 82% 78%, rgba(56, 189, 248, 0.14), transparent 65%),
+    radial-gradient(28% 26% at 14% 84%, rgba(163, 230, 53, 0.16), transparent 65%),
+    #f0fdf4;
+}
+body.theme-solarpunk .watercolor-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  opacity: 0.5;
+}
+
+/* ---- 全局按钮体系（wc-btn → 生态绿） ---- */
+body.theme-solarpunk .wc-btn {
+  border-radius: 16px;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  background: linear-gradient(180deg, #ffffff, rgba(240, 253, 244, 0.9));
+  color: #15803d;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  box-shadow: 0 4px 20px rgba(74, 222, 128, 0.2);
+  transition: all 0.3s ease-in-out;
+}
+body.theme-solarpunk .wc-btn:hover {
+  transform: scale(1.05);
+  border-color: rgba(34, 197, 94, 0.65);
+  box-shadow: 0 10px 30px rgba(74, 222, 128, 0.3);
+}
+body.theme-solarpunk .wc-btn:active {
+  transform: scale(0.95);
+}
+body.theme-solarpunk .wc-btn.primary,
+body.theme-solarpunk .wc-btn.gradient {
+  background: linear-gradient(to right, #4ade80, #10b981);
+  color: #fff;
+  border: none;
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35);
+}
+body.theme-solarpunk .wc-btn.primary:hover:not(:disabled),
+body.theme-solarpunk .wc-btn.gradient:hover:not(:disabled) {
+  background: linear-gradient(to right, #5fe08f, #1fc48b);
+  box-shadow: 0 12px 36px rgba(16, 185, 129, 0.45);
+}
+body.theme-solarpunk .wc-btn.primary:active:not(:disabled),
+body.theme-solarpunk .wc-btn.gradient:active:not(:disabled) {
+  background: linear-gradient(to right, #3ecf78, #0fa572);
+}
+body.theme-solarpunk .wc-btn.gold {
+  background: linear-gradient(to right, #fbbf24, #f59e0b);
+  color: #fff;
+  border: none;
+  box-shadow: 0 8px 24px rgba(251, 191, 36, 0.35);
+}
+body.theme-solarpunk .wc-btn.success {
+  background: linear-gradient(to right, #a3e635, #84cc16);
+  color: #fff;
+  border: none;
+  box-shadow: 0 8px 24px rgba(132, 204, 22, 0.35);
+}
+body.theme-solarpunk .wc-btn.ghost {
+  background: transparent;
+  border: 2px dashed rgba(34, 197, 94, 0.45);
+  color: #16a34a;
+  box-shadow: none;
+}
+body.theme-solarpunk .wc-btn.ghost:hover:not(:disabled) {
+  background: rgba(74, 222, 128, 0.08);
+  border-style: solid;
+  box-shadow: 0 6px 20px rgba(74, 222, 128, 0.2);
+}
+body.theme-solarpunk .wc-btn.danger-soft {
+  background: linear-gradient(180deg, #fff7ed, #ffedd5);
+  border: 1.5px solid rgba(251, 146, 60, 0.5);
+  color: #c2410c;
+  box-shadow: 0 4px 16px rgba(251, 146, 60, 0.2);
+}
+body.theme-solarpunk .wc-btn.danger-soft:hover:not(:disabled) {
+  border-color: rgba(251, 146, 60, 0.8);
+  box-shadow: 0 8px 24px rgba(251, 146, 60, 0.3);
+}
+body.theme-solarpunk .wc-btn:disabled {
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* ---- 筛选胶囊（rail-tool / type-pill / skin-chip） ---- */
+body.theme-solarpunk .rail-tool,
+body.theme-solarpunk .type-pill,
+body.theme-solarpunk .skin-chip {
+  border-radius: 999px;
+  border: 1.5px solid rgba(34, 197, 94, 0.3);
+  background: rgba(255, 255, 255, 0.8);
+  color: #6b7280;
+  box-shadow: 0 4px 16px rgba(74, 222, 128, 0.15);
+  transition: all 0.3s ease-in-out;
+}
+body.theme-solarpunk .rail-tool:hover,
+body.theme-solarpunk .type-pill:hover,
+body.theme-solarpunk .skin-chip:hover {
+  transform: scale(1.05);
+  color: #16a34a;
+  border-color: rgba(34, 197, 94, 0.55);
+  box-shadow: 0 10px 30px rgba(74, 222, 128, 0.28);
+}
+body.theme-solarpunk .rail-tool.active,
+body.theme-solarpunk .type-pill.active,
+body.theme-solarpunk .skin-chip.active {
+  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.55);
+  font-weight: 500;
+  box-shadow: 0 6px 20px rgba(74, 222, 128, 0.25);
+}
+
+/* ---- 分段控件（mode-pill / l2d-seg） ---- */
+body.theme-solarpunk .mode-toggle {
+  background: rgba(74, 222, 128, 0.14);
+  border-radius: 999px;
+}
+body.theme-solarpunk .mode-pill.active {
+  background: linear-gradient(135deg, #4ade80, #10b981);
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.35);
+}
+body.theme-solarpunk .l2d-seg {
+  background: rgba(74, 222, 128, 0.14);
+  border-radius: 12px;
+}
+body.theme-solarpunk .l2d-seg-thumb {
+  background: linear-gradient(120deg, #4ade80, #10b981);
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);
+}
+body.theme-solarpunk .l2d-seg-item.active {
+  color: #fff;
+  font-weight: 500;
+  text-shadow: none;
+}
+
+/* ---- 开关行 ---- */
+body.theme-solarpunk .l2d-switch-ico {
+  background: rgba(74, 222, 128, 0.18);
+  color: #16a34a;
+}
+body.theme-solarpunk .l2d-switch-ico.on {
+  background: rgba(251, 191, 36, 0.22);
+  color: #b45309;
+}
+body.theme-solarpunk .l2d-switch {
+  background: rgba(34, 197, 94, 0.3);
+}
+body.theme-solarpunk .l2d-switch::after {
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+}
+body.theme-solarpunk .l2d-switch.on {
+  background: linear-gradient(120deg, #4ade80, #10b981);
+}
+
+/* ---- 卡片 / 面板 ---- */
+body.theme-solarpunk .panel-card,
+body.theme-solarpunk .wc-card,
+body.theme-solarpunk .ship-card {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1.5px solid rgba(34, 197, 94, 0.28);
+  border-radius: 20px;
+  box-shadow: 0 8px 28px rgba(74, 222, 128, 0.18);
+}
+body.theme-solarpunk .panel-card:hover,
+body.theme-solarpunk .ship-card:hover {
+  box-shadow: 0 12px 36px rgba(74, 222, 128, 0.28);
+}
+body.theme-solarpunk .panel-title {
+  color: #15803d;
+  letter-spacing: 3px;
+  font-family: var(--font-sans);
+  border-bottom-color: rgba(34, 197, 94, 0.3);
+}
+body.theme-solarpunk .control-panel,
+body.theme-solarpunk .ship-rail,
+body.theme-solarpunk .main-topbar {
+  background: rgba(240, 253, 244, 0.9);
+  border-color: rgba(34, 197, 94, 0.25);
+}
+
+/* ---- 皮肤条 / 下载项 ---- */
+body.theme-solarpunk .skin-bar {
+  background: rgba(240, 253, 244, 0.94);
+  border-top-color: rgba(34, 197, 94, 0.25);
+}
+body.theme-solarpunk .dl-item {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(34, 197, 94, 0.25);
+  color: #1f2937;
+}
+body.theme-solarpunk .dl-item:hover {
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 8px 24px rgba(74, 222, 128, 0.22);
+}
+body.theme-solarpunk .dl-item.selected {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.2), rgba(251, 191, 36, 0.14));
+  border-color: rgba(34, 197, 94, 0.5);
+}
+body.theme-solarpunk .dl-name {
+  color: #1f2937;
+}
+body.theme-solarpunk .dl-check {
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(255, 255, 255, 0.85);
+}
+body.theme-solarpunk .dl-check.on {
+  background: #22c55e;
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 4px 12px rgba(34, 197, 94, 0.35);
+}
+body.theme-solarpunk .dim,
+body.theme-solarpunk .bar-dim {
+  color: #6b7280;
+}
+body.theme-solarpunk .panel-field label,
+body.theme-solarpunk .export-form label,
+body.theme-solarpunk .group-title {
+  color: #6b7280;
+}
+
+/* ---- 收藏星标 ---- */
+body.theme-solarpunk .skin-fav-btn {
+  border: 1.5px solid rgba(34, 197, 94, 0.4);
+  background: rgba(255, 255, 255, 0.85);
+  color: #16a34a;
+  box-shadow: 0 4px 16px rgba(74, 222, 128, 0.18);
+}
+body.theme-solarpunk .skin-fav-btn:hover {
+  transform: scale(1.12) rotate(-8deg);
+  box-shadow: 0 10px 30px rgba(74, 222, 128, 0.3);
+}
+body.theme-solarpunk .skin-fav-btn.on {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(251, 191, 36, 0.4);
+}
+
+/* ---- 圆形图标按钮（全屏等） ---- */
+body.theme-solarpunk .stage-fullscreen-btn {
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.6);
+  color: #16a34a;
+  box-shadow: 0 4px 16px rgba(74, 222, 128, 0.2);
+}
+body.theme-solarpunk .stage-fullscreen-btn:hover {
+  background: rgba(255, 255, 255, 0.85);
+  transform: scale(1.08);
+  box-shadow: 0 10px 30px rgba(74, 222, 128, 0.3);
+}
+
+/* ---- 迷你导航（动画 ←→ / 页面导航 / 面板导航） ---- */
+body.theme-solarpunk .anim-nav-btn,
+body.theme-solarpunk .page-nav-btn,
+body.theme-solarpunk .panel-nav-btn {
+  border-radius: 12px;
+  border: 1.5px solid rgba(34, 197, 94, 0.35);
+  background: rgba(255, 255, 255, 0.85);
+  color: #15803d;
+  font-family: var(--font-sans);
+  box-shadow: 0 4px 16px rgba(74, 222, 128, 0.18);
+}
+body.theme-solarpunk .anim-nav-btn:hover,
+body.theme-solarpunk .page-nav-btn:hover,
+body.theme-solarpunk .panel-nav-btn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 10px 30px rgba(74, 222, 128, 0.28);
+}
+body.theme-solarpunk .page-nav-btn.active,
+body.theme-solarpunk .panel-nav-btn.active {
+  background: linear-gradient(135deg, #dcfce7, #bbf7d0);
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.55);
+  font-weight: 500;
+  box-shadow: 0 6px 20px rgba(74, 222, 128, 0.25);
+}
+body.theme-solarpunk .anim-nav-label {
+  color: #6b7280;
+}
+
+/* ---- L2D 互动面板：暖白纸感 + 绿描边 ---- */
+body.theme-solarpunk .l2d-panel-a {
+  width: 252px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1.5px solid rgba(34, 197, 94, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 8px 28px rgba(74, 222, 128, 0.25);
+  padding: 12px 12px 10px;
+}
+body.theme-solarpunk .l2d-panel-a-title {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 2px;
+  color: #15803d;
+}
+body.theme-solarpunk .l2d-panel-a-dot {
+  background: linear-gradient(135deg, #4ade80, #10b981);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+}
+body.theme-solarpunk .l2d-panel-a-collapse {
+  background: rgba(74, 222, 128, 0.18);
+  color: #15803d;
+}
+body.theme-solarpunk .l2d-panel-a-collapse:hover {
+  background: rgba(74, 222, 128, 0.32);
+  color: #14532d;
+}
+body.theme-solarpunk .l2d-switch-row:hover {
+  background: rgba(74, 222, 128, 0.08);
+}
+body.theme-solarpunk .l2d-switch-txt {
+  color: #1f2937;
+}
+body.theme-solarpunk .l2d-switch-txt small {
+  color: #6b7280;
+}
+body.theme-solarpunk .l2d-subtitle-a {
+  background: rgba(240, 253, 244, 0.95);
+  border: 1.5px dashed rgba(34, 197, 94, 0.45);
+  border-radius: 14px;
+  color: #166534;
+  text-shadow: none;
+}
+body.theme-solarpunk .l2d-subtitle-a::before {
+  color: rgba(22, 163, 74, 0.7);
+}
+body.theme-solarpunk .l2d-subtitle-a-who {
+  color: #15803d;
+}
+body.theme-solarpunk .l2d-subtitle-a.empty {
+  color: #9ca3af;
+}
+
+/* ---- 预览舞台：温暖生态绿（立绘背景为图片不受影响） ---- */
+body.theme-solarpunk .preview-stage.bg-auto,
+body.theme-solarpunk .preview-stage.bg-gradient {
+  background:
+    radial-gradient(60% 65% at 50% 40%, rgba(255, 255, 255, 0.85), transparent 60%),
+    linear-gradient(160deg, #dcfce7, #bbf7d0 45%, #a7f3d0);
+}
+body.theme-solarpunk .preview-stage.bg-solid {
+  background: #bbf7d0;
+}
+body.theme-solarpunk .preview-stage.bg-monet {
+  background:
+    radial-gradient(60% 70% at 20% 25%, rgba(74, 222, 128, 0.35), transparent 60%),
+    radial-gradient(55% 65% at 80% 20%, rgba(56, 189, 248, 0.28), transparent 60%),
+    radial-gradient(70% 80% at 50% 95%, rgba(251, 191, 36, 0.25), transparent 60%),
+    linear-gradient(160deg, #f0fdf4, #dcfce7);
+}
+body.theme-solarpunk .preview-stage.bg-frost {
+  background:
+    radial-gradient(45% 55% at 30% 30%, rgba(74, 222, 128, 0.25), transparent 60%),
+    radial-gradient(45% 55% at 75% 70%, rgba(56, 189, 248, 0.2), transparent 60%),
+    linear-gradient(180deg, #f0fdf4, #dcfce7);
+}
+body.theme-solarpunk .preview-stage.bg-star {
+  background:
+    radial-gradient(1.5px 1.5px at 20% 30%, rgba(255, 255, 255, 0.9), transparent 60%),
+    radial-gradient(1.5px 1.5px at 60% 15%, rgba(255, 255, 255, 0.8), transparent 60%),
+    radial-gradient(1.5px 1.5px at 80% 45%, rgba(255, 255, 255, 0.7), transparent 60%),
+    radial-gradient(1.5px 1.5px at 40% 70%, rgba(255, 255, 255, 0.8), transparent 60%),
+    radial-gradient(1.5px 1.5px at 90% 80%, rgba(255, 255, 255, 0.65), transparent 60%),
+    linear-gradient(180deg, #f0fdf4, #dcfce7);
+}
+body.theme-solarpunk .stage-info-name {
+  color: #14532d;
+  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.7);
+}
+body.theme-solarpunk .stage-info-skin {
+  color: rgba(31, 41, 55, 0.65);
+}
+body.theme-solarpunk .preview-title {
+  color: #14532d;
+  text-shadow: 0 1px 8px rgba(255, 255, 255, 0.7);
+}
+body.theme-solarpunk .preview-sub {
+  color: rgba(31, 41, 55, 0.6);
+}
+
+/* ---- 设置页 About / 主题选择器 ---- */
+body.theme-solarpunk .about-name {
+  color: #1f2937;
+}
+body.theme-solarpunk .about-version {
+  background: rgba(251, 191, 36, 0.2);
+  color: #b45309;
+}
+body.theme-solarpunk .about-desc {
+  color: #1f2937;
+}
+body.theme-solarpunk .about-desc b {
+  color: #15803d;
+}
+body.theme-solarpunk .about-list {
+  color: #1f2937;
+}
+body.theme-solarpunk .about-list li::marker {
+  color: #22c55e;
+}
+body.theme-solarpunk .about-sec {
+  color: #15803d;
+  border-bottom-color: rgba(34, 197, 94, 0.3);
+}
+body.theme-solarpunk .about-foot {
+  color: #6b7280;
+  border-top-color: rgba(34, 197, 94, 0.3);
+}
+body.theme-solarpunk .about-logo {
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.2), rgba(251, 191, 36, 0.16));
+  border-color: rgba(34, 197, 94, 0.4);
+  box-shadow: 0 6px 20px rgba(74, 222, 128, 0.2);
+}
+body.theme-solarpunk .theme-opt {
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(255, 255, 255, 0.8);
+}
+body.theme-solarpunk .theme-opt:hover {
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 8px 24px rgba(74, 222, 128, 0.25);
+}
+body.theme-solarpunk .theme-opt.active {
+  border-color: rgba(34, 197, 94, 0.6);
+  background: linear-gradient(135deg, rgba(74, 222, 128, 0.18), rgba(251, 191, 36, 0.12));
+  box-shadow: 0 8px 24px rgba(74, 222, 128, 0.28);
+}
+body.theme-solarpunk .theme-name {
+  color: #1f2937;
+}
+body.theme-solarpunk .theme-check {
+  color: #15803d;
+}
+body.theme-solarpunk .theme-swatch {
+  border-color: rgba(34, 197, 94, 0.4);
+}
+body.theme-solarpunk .theme-swatch-watercolor {
+  background:
+    radial-gradient(60% 60% at 30% 30%, rgba(74, 222, 128, 0.9), transparent 70%),
+    radial-gradient(60% 60% at 70% 65%, rgba(56, 189, 248, 0.9), transparent 70%),
+    linear-gradient(135deg, #f0fdf4, #dcfce7);
+}
+body.theme-solarpunk .theme-swatch-shoujo {
+  background:
+    radial-gradient(60% 60% at 30% 30%, rgba(255, 183, 197, 0.9), transparent 70%),
+    radial-gradient(60% 60% at 70% 65%, rgba(196, 181, 253, 0.9), transparent 70%),
+    linear-gradient(135deg, #fff5f7, #ffe9ee);
+}
+
+/* ---- 设置页其它细节 ---- */
+body.theme-solarpunk .update-result {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(34, 197, 94, 0.25);
+  color: #1f2937;
+}
+body.theme-solarpunk .voice-dl-stage {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.4);
+  color: #b45309;
+}
+body.theme-solarpunk .update-line {
+  color: #1f2937;
+}
+body.theme-solarpunk .update-review {
+  color: #b45309;
+}
+body.theme-solarpunk .update-error {
+  color: #dc2626;
+}
+body.theme-solarpunk .wc-card .n-checkbox__label,
+body.theme-solarpunk .field label {
+  color: #1f2937;
+}
+body.theme-solarpunk .page-header h1 {
+  color: #14532d;
+}
+
+/* ---- 遗留的浅色元素修正 ---- */
+body.theme-solarpunk .rail-char,
+body.theme-solarpunk .rail-name,
+body.theme-solarpunk .rail-skin,
+body.theme-solarpunk .rail-star,
+body.theme-solarpunk .ship-name,
+body.theme-solarpunk .ship-en,
+body.theme-solarpunk .skin-count,
+body.theme-solarpunk .ship-watermark,
+body.theme-solarpunk .plugin-row,
+body.theme-solarpunk .preview-heading {
+  color: #1f2937 !important;
+}
+body.theme-solarpunk .rail-skin,
+body.theme-solarpunk .ship-card .skin-count,
+body.theme-solarpunk .ship-meta {
+  color: #6b7280 !important;
+}
+body.theme-solarpunk .wc-pill.rose {
+  color: #b45309;
+  background: rgba(251, 191, 36, 0.16);
+}
+body.theme-solarpunk .wc-pill.green {
+  color: #15803d;
+  background: rgba(74, 222, 128, 0.16);
+}
+body.theme-solarpunk .wc-pill.gold {
+  color: #b45309;
+  background: rgba(251, 191, 36, 0.18);
+}
+body.theme-solarpunk .wc-pill.blue {
+  color: #0369a1;
+  background: rgba(56, 189, 248, 0.16);
+}
+body.theme-solarpunk .anim-multi :deep(.n-base-selection-tag-wrapper .n-tag),
+body.theme-solarpunk .anim-multi .n-base-selection-tag-wrapper .n-tag {
+  background: rgba(74, 222, 128, 0.16) !important;
+  border-color: rgba(34, 197, 94, 0.4) !important;
+  color: #15803d !important;
+}
+body.theme-solarpunk .anim-multi :deep(.n-base-selection-tag-wrapper .n-tag .n-tag__close),
+body.theme-solarpunk .anim-multi .n-base-selection-tag-wrapper .n-tag .n-tag__close {
+  color: #15803d !important;
+}
+body.theme-solarpunk .rail-tool.active,
+body.theme-solarpunk .type-pill.active,
+body.theme-solarpunk .panel-nav-btn.active,
+body.theme-solarpunk .page-nav-btn.active,
+body.theme-solarpunk .skin-chip.active {
+  color: #15803d !important;
+}
+body.theme-solarpunk .dl-progress-label,
+body.theme-solarpunk .dl-progress-stage,
+body.theme-solarpunk .batch-progress-text,
+body.theme-solarpunk .dl-ok {
+  color: #1f2937 !important;
+}
+body.theme-solarpunk .dl-progress-meta {
+  color: #6b7280 !important;
+}
+body.theme-solarpunk .download-msg {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #1f2937;
+  box-shadow: 0 8px 28px rgba(74, 222, 128, 0.2);
+}
+body.theme-solarpunk .batch-bar {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(34, 197, 94, 0.3);
+  box-shadow: 0 8px 28px rgba(74, 222, 128, 0.2);
+}
+body.theme-solarpunk .panel-tip {
+  color: #b45309;
+}
+body.theme-solarpunk .filter-field label {
+  color: #6b7280;
+}
+body.theme-solarpunk .zoom-hint {
+  color: rgba(31, 41, 55, 0.7) !important;
+}
+body.theme-solarpunk .l2d-subtitle-box {
+  color: #1f2937 !important;
+}
+body.theme-solarpunk .main-title {
+  color: #1f2937 !important;
+}
+body.theme-solarpunk .main-title h1 {
+  color: #14532d !important;
+}
+body.theme-solarpunk .rail-card {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(34, 197, 94, 0.25);
+}
+body.theme-solarpunk .rail-card:hover {
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow: 0 8px 24px rgba(74, 222, 128, 0.25);
+}
+body.theme-solarpunk .rail-check {
+  border-color: rgba(34, 197, 94, 0.45);
+  color: #15803d;
+}
+body.theme-solarpunk .filter-field {
+  color: #1f2937;
+}
+
+/* =========================================================
+   Naive 组件覆盖（生态绿）
+   ========================================================= */
+body.theme-solarpunk .n-button {
+  background-image: linear-gradient(135deg, #4ade80, #10b981) !important;
+  border: none !important;
+  box-shadow: 0 8px 24px rgba(16, 185, 129, 0.35) !important;
+  color: #fff !important;
+}
+body.theme-solarpunk .n-button:hover {
+  background-image: linear-gradient(135deg, #6ee7a0, #34d399) !important;
+  box-shadow: 0 12px 36px rgba(16, 185, 129, 0.45) !important;
+}
+body.theme-solarpunk .n-button:active {
+  background-image: linear-gradient(135deg, #10b981, #059669) !important;
+}
+body.theme-solarpunk .n-button[disabled] {
+  background-image: linear-gradient(135deg, #d1fae5, #a7f3d0) !important;
+  color: #6b7280 !important;
+  box-shadow: none !important;
+}
+body.theme-solarpunk .n-button--secondary-type {
+  background-image: linear-gradient(180deg, #ffffff, rgba(240, 253, 244, 0.9)) !important;
+  border: 1.5px solid rgba(34, 197, 94, 0.4) !important;
+  color: #15803d !important;
+  box-shadow: 0 4px 16px rgba(74, 222, 128, 0.18) !important;
+}
+body.theme-solarpunk .n-button--secondary-type:hover {
+  border-color: rgba(34, 197, 94, 0.7) !important;
+  color: #14532d !important;
+  box-shadow: 0 10px 30px rgba(74, 222, 128, 0.28) !important;
+}
+body.theme-solarpunk .n-button--error-type {
+  background-image: linear-gradient(180deg, #fff7ed, #ffedd5) !important;
+  border: 1.5px solid rgba(251, 146, 60, 0.55) !important;
+  color: #c2410c !important;
+  box-shadow: 0 4px 16px rgba(251, 146, 60, 0.2) !important;
+}
+body.theme-solarpunk .n-button--error-type:hover {
+  background-image: linear-gradient(180deg, #ffedd5, #fed7aa) !important;
+  border-color: rgba(251, 146, 60, 0.8) !important;
+  color: #9a3412 !important;
+}
+body.theme-solarpunk .n-button--error-type:active {
+  background-image: linear-gradient(180deg, #fed7aa, #fdba74) !important;
+}
+body.theme-solarpunk .n-button--quaternary-type {
+  background-image: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+body.theme-solarpunk .n-button--quaternary-type:hover {
+  background-image: none !important;
+}
+body.theme-solarpunk .n-button--quaternary-type.n-button--error-type {
+  color: #c2410c !important;
+}
+body.theme-solarpunk .n-button--quaternary-type.n-button--error-type:hover {
+  color: #9a3412 !important;
+  background-image: none !important;
+}
