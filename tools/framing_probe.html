@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!--
+  BD2 取景批量探针页（tools/framing_probe.py 调用）。
+  用法：framing_probe.html?asset=<目录名>&skel=x.skel&atlas=x.atlas[&animtime=2.5]
+  - 与 templates/wallpaper_spine.html 的取景链完全一致（isBgPanelSlot/layerBounds/
+    contentFrame/denseAreaFrame/computeBounds + WallpaperLayout.spineCamera），
+    用于量化「包围盒 vs 实际内容」比例，定位黑边过大的皮肤。
+  - 相机按 t=0 姿态的 boundsCache 设定（与预览 buildScene 一致）；
+    像素统计默认在 animtime 秒处采一帧（避开约会皮 t=0 的全屏暗幕开场相位）。
+  - 页内额外输出 diag：raw 包围盒 / contentFrame / denseAreaFrame / 最终 bounds /
+    top 附件列表（名称/面积/包围盒），供定位「谁撑爆了包围盒」。
+-->
+<style>
+  html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: #050510; }
+  #canvas { display: block; width: 100vw; height: 100vh; }
+  #out { position: fixed; left: 6px; top: 6px; z-index: 20; background: rgba(0,0,0,.65);
+         color: #8effa0; font: 11px/1.5 ui-monospace, Consolas, monospace; padding: 4px 10px;
+         border-radius: 4px; white-space: pre-wrap; max-width: 92vw; max-height: 90vh; overflow: hidden; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<pre id="out">loading…</pre>
+<script src="spine-webgl-4.1.js"></script>
+<script src="wallpaper-layout.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  var out = document.getElementById('out');
+  var canvas = document.getElementById('canvas');
+  var gl = null, renderer = null;
+  var skeleton = null, state = null, data = null;
+  var boundsCache = null;
+  var BD2_PREMULTIPLY_UPLOAD = true; // 铁律：BD2 贴图直通 alpha，上传时浏览器预乘（false 会整体洗白）
+
+  function setOut(t) { out.textContent = t; }
+
+  var q = new URLSearchParams(location.search);
+  var ASSET = q.get('asset') || '';
+  var SKEL = q.get('skel') || '';
+  var ATLAS = q.get('atlas') || '';
+  var ANIMTIME = parseFloat(q.get('animtime') || '2.5');
+  var BASE = 'assets/' + ASSET + '/';
+
+  // ---- 与模板一致：bestSkin / pickAnim ----
+  function bestSkin(d) {
+    var skins = d.skins || [];
+    if (skins.length <= 1) return d.defaultSkin || skins[0];
+    var best = d.defaultSkin || skins[0];
+    var bestCount = -1;
+    for (var si = 0; si < skins.length; si++) {
+      var sk = skins[si], count = 0;
+      var skel = new spine.Skeleton(d);
+      skel.setSkin(sk);
+      skel.setSlotsToSetupPose();
+      skel.updateWorldTransform();
+      for (var s2 = 0; s2 < skel.slots.length; s2++) {
+        var slot = skel.slots[s2], att = slot.getAttachment();
+        if (!att) continue;
+        if (slot.color && slot.color.a < 0.01) continue;
+        if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+        count++;
+      }
+      if (count > bestCount) { bestCount = count; best = sk; }
+    }
+    return best;
+  }
+
+  function pickAnim(d) {
+    var names = d.animations.map(function (a) { return a.name; });
+    var idle = names.find(function (n) { return /idle/i.test(n); }) || names.find(function (n) { return n === 'normal'; });
+    return idle || names[0] || '';
+  }
+
+  function isBgLayer(l) {
+    if (!l || !l.skeleton || !l.name) return false;
+    return /b(?:g)?\d*$/i.test(l.name.replace(/\.skel$/i, ''));
+  }
+
+  // ---- 与模板 wallpaper_spine.html 逐字一致：isBgPanelSlot / layerBounds / 取景链 ----
+  function isBgPanelSlot(slot) {
+    var nm = (((slot.data && slot.data.name) || '') + '').toLowerCase().trim();
+    return nm === 'bk' || nm === 'bg' || nm.indexOf('b_bg') === 0 || nm.indexOf('bg_') === 0 || nm.indexOf('bg-') === 0;
+  }
+
+  // 与模板 wallpaper_spine.html 同步：「画幅遮罩」插槽（约会皮巨型围板）过滤
+  function isMaskSlotName(nm) {
+    nm = (nm + '').toLowerCase().trim();
+    if (nm === 'fr' || /^fr\s*\(\d+\)$/.test(nm)) return true;
+    if (nm.indexOf('bk') === 0) return true;
+    if (nm === 'black' || /^black\d/.test(nm)) return true;
+    if (nm === 'black_all' || nm === 'black_blur') return true;
+    if (nm.indexOf('black glow') === 0) return true;
+    if (nm.indexOf('hit_cut_bg') === 0) return true;
+    return false;
+  }
+
+  function markMaskSlots() {
+    var areas = [], infos = [];
+    for (var i = 0; i < skeleton.slots.length; i++) {
+      var slot = skeleton.slots[i], att = slot.getAttachment();
+      slot._maskPanel = false;
+      if (!att) continue;
+      if (slot.color && slot.color.a < 0.01) continue;
+      if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+      if (isBgPanelSlot(slot)) continue;
+      var isRegion = att instanceof spine.RegionAttachment;
+      var isMesh = att instanceof spine.MeshAttachment;
+      if (!isRegion && !isMesh) continue;
+      var len = isRegion ? 8 : att.worldVerticesLength;
+      if (!len) continue;
+      var verts = spine.Utils.newFloatArray(len);
+      if (isRegion) att.computeWorldVertices(slot, verts, 0, 2);
+      else att.computeWorldVertices(slot, 0, len, verts, 0, 2);
+      var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (var j = 0; j < len; j += 2) {
+        if (verts[j] < minX) minX = verts[j];
+        if (verts[j] > maxX) maxX = verts[j];
+        if (verts[j + 1] < minY) minY = verts[j + 1];
+        if (verts[j + 1] > maxY) maxY = verts[j + 1];
+      }
+      var a = (maxX - minX) * (maxY - minY);
+      if (a > 0) { areas.push(a); infos.push({ slot: slot, area: a }); }
+    }
+    if (!areas.length) return;
+    areas.sort(function (x, y) { return x - y; });
+    var median = areas[Math.floor(areas.length / 2)] || 1;
+    infos.forEach(function (it) {
+      if (it.area >= median * 8 && isMaskSlotName(it.slot.data && it.slot.data.name)) {
+        it.slot._maskPanel = true;
+      }
+    });
+    window.__maskDebug = {
+      median: Math.round(median),
+      named: infos.filter(function (it) { return isMaskSlotName(it.slot.data && it.slot.data.name); })
+        .map(function (it) { return [it.slot.data.name, Math.round(it.area)]; }),
+      marked: infos.filter(function (it) { return it.slot._maskPanel; })
+        .map(function (it) { return [it.slot.data.name, Math.round(it.area)]; }),
+    };
+  }
+
+  function layerBounds(l) {
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (var i = 0; i < l.skeleton.slots.length; i++) {
+      var slot = l.skeleton.slots[i], att = slot.getAttachment();
+      if (!att) continue;
+      if (slot.color && slot.color.a < 0.01) continue;
+      if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+      if (isBgPanelSlot(slot) || slot._maskPanel) continue;
+      var isRegion = att instanceof spine.RegionAttachment;
+      if (!isRegion && !(att instanceof spine.MeshAttachment) && !(att instanceof spine.BoundingBoxAttachment)) continue;
+      var len = isRegion ? 8 : att.worldVerticesLength;
+      if (!len) continue;
+      var verts = spine.Utils.newFloatArray(len);
+      if (isRegion) att.computeWorldVertices(slot, verts, 0, 2);
+      else att.computeWorldVertices(slot, 0, len, verts, 0, 2);
+      for (var j = 0; j < len; j += 2) {
+        if (verts[j] < minX) minX = verts[j];
+        if (verts[j] > maxX) maxX = verts[j];
+        if (verts[j + 1] < minY) minY = verts[j + 1];
+        if (verts[j + 1] > maxY) maxY = verts[j + 1];
+      }
+    }
+    return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+  }
+
+  function collectItems() {
+    var items = [];
+    var layers = [{ skeleton: skeleton }];
+    layers.forEach(function (l) {
+      for (var i = 0; i < l.skeleton.slots.length; i++) {
+        var slot = l.skeleton.slots[i], att = slot.getAttachment();
+        if (!att) continue;
+        if (slot.color && slot.color.a < 0.01) continue;
+        if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+        if (isBgPanelSlot(slot) || slot._maskPanel) continue;
+        var isRegion = att instanceof spine.RegionAttachment;
+        var isMesh = att instanceof spine.MeshAttachment;
+        if (!isRegion && !isMesh) continue;
+        var len = isRegion ? 8 : att.worldVerticesLength;
+        if (!len) continue;
+        var verts = spine.Utils.newFloatArray(len);
+        if (isRegion) att.computeWorldVertices(slot, verts, 0, 2);
+        else att.computeWorldVertices(slot, 0, len, verts, 0, 2);
+        var b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+        for (var j = 0; j < len; j += 2) {
+          if (verts[j] < b.minX) b.minX = verts[j];
+          if (verts[j] > b.maxX) b.maxX = verts[j];
+          if (verts[j + 1] < b.minY) b.minY = verts[j + 1];
+          if (verts[j + 1] > b.maxY) b.maxY = verts[j + 1];
+        }
+        items.push({ name: (slot.data && slot.data.name) + '/' + (att.name || ''), b: b });
+      }
+    });
+    return items;
+  }
+
+  function boxesBounds(items) {
+    var raw = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
+    items.forEach(function (it) {
+      var b = it.b || it;
+      if (b.minX < raw.minX) raw.minX = b.minX;
+      if (b.maxX > raw.maxX) raw.maxX = b.maxX;
+      if (b.minY < raw.minY) raw.minY = b.minY;
+      if (b.maxY > raw.maxY) raw.maxY = b.maxY;
+    });
+    return raw;
+  }
+
+  function gridCrop(items, keepList, padRatio) {
+    var raw = boxesBounds(items);
+    var rawW = raw.maxX - raw.minX, rawH = raw.maxY - raw.minY;
+    var N = 64;
+    var gw = rawW / N || 1, gh = rawH / N || 1;
+    var grid = new Float64Array(N * N);
+    (keepList || items).forEach(function (it) {
+      var b = it.b;
+      var cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+      var gx = Math.min(N - 1, Math.max(0, Math.floor((cx - raw.minX) / gw)));
+      var gy = Math.min(N - 1, Math.max(0, Math.floor((cy - raw.minY) / gh)));
+      grid[gy * N + gx] += Math.max(1, (b.maxX - b.minX) * (b.maxY - b.minY));
+    });
+    var maxCell = 0;
+    for (var v = 0; v < grid.length; v++) if (grid[v] > maxCell) maxCell = grid[v];
+    if (!maxCell) return null;
+    var threshold = maxCell * 0.02;
+    var fminX = raw.maxX, fmaxX = raw.minX, fminY = raw.maxY, fmaxY = raw.minY, kept = 0;
+    for (var gy2 = 0; gy2 < N; gy2++) {
+      for (var gx2 = 0; gx2 < N; gx2++) {
+        if (grid[gy2 * N + gx2] >= threshold) {
+          kept++;
+          if (raw.minX + gx2 * gw < fminX) fminX = raw.minX + gx2 * gw;
+          if (raw.minX + (gx2 + 1) * gw > fmaxX) fmaxX = raw.minX + (gx2 + 1) * gw;
+          if (raw.minY + gy2 * gh < fminY) fminY = raw.minY + gy2 * gh;
+          if (raw.minY + (gy2 + 1) * gh > fmaxY) fmaxY = raw.minY + (gy2 + 1) * gh;
+        }
+      }
+    }
+    if (!kept) return null;
+    var padX = (fmaxX - fminX) * padRatio, padY = (fmaxY - fminY) * padRatio;
+    return {
+      frame: { minX: fminX, maxX: fmaxX, minY: fminY, maxY: fmaxY },
+      padded: { minX: fminX - padX, maxX: fmaxX + padX, minY: fminY - padY, maxY: fmaxY + padY },
+    };
+  }
+
+  function contentFrame() {
+    var items = collectItems();
+    if (!items.length) return null;
+    var raw = boxesBounds(items);
+    var rawW = raw.maxX - raw.minX, rawH = raw.maxY - raw.minY;
+    var f = gridCrop(items, null, 0.15);
+    if (!f) return null;
+    // ratio 用 padding 前的裁剪框（与模板一致）
+    var ratioW = (f.frame.maxX - f.frame.minX) / rawW, ratioH = (f.frame.maxY - f.frame.minY) / rawH;
+    if (ratioW > 0.55 || ratioH > 0.55 || ratioW < 0.08 || ratioH < 0.08) return null;
+    return f.padded;
+  }
+
+  function denseAreaFrame() {
+    var items = collectItems();
+    if (!items.length) return null;
+    var raw = boxesBounds(items);
+    var rawW = raw.maxX - raw.minX, rawH = raw.maxY - raw.minY;
+    var areas = items.map(function (it) { return (it.b.maxX - it.b.minX) * (it.b.maxY - it.b.minY); });
+    var maxA = Math.max.apply(null, areas);
+    if (maxA >= rawW * rawH * 0.8) return null;
+    var keep = items.filter(function (it, i) { return areas[i] <= maxA * 0.4; });
+    if (!keep.length) return null;
+    var f = gridCrop(items, keep, 0.12);
+    if (!f) return null;
+    if ((f.frame.maxX - f.frame.minX) >= rawW * 0.9 || (f.frame.maxY - f.frame.minY) >= rawH * 0.9) return null;
+    return f.padded;
+  }
+
+  function computeBounds() {
+    if (boundsCache) return boundsCache;
+    var dense = contentFrame();
+    if (dense) { boundsCache = dense; return boundsCache; }
+    var areaFrame = denseAreaFrame();
+    if (areaFrame) { boundsCache = areaFrame; return boundsCache; }
+    var b = layerBounds({ skeleton: skeleton });
+    if (!isFinite(b.minX)) { boundsCache = { minX: -1, maxX: 1, minY: -1, maxY: 1 }; return boundsCache; }
+    boundsCache = b;
+    return boundsCache;
+  }
+
+  function applyLayout() {
+    if (!renderer) return;
+    var cam = WallpaperLayout.spineCamera(computeBounds(), canvas.clientWidth, canvas.clientHeight, {
+      scale: 100, offsetX: 0, offsetY: 0, alignX: 0.5, alignY: 0.5,
+    });
+    renderer.camera.zoom = cam.zoom;
+    renderer.camera.position.x = cam.x;
+    renderer.camera.position.y = cam.y;
+    renderer.camera.position.z = 0;
+  }
+
+  function drawFrame() {
+    state.update(0);
+    state.apply(skeleton);
+    skeleton.updateWorldTransform();
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    renderer.begin();
+    renderer.drawSkeleton(skeleton, true);
+    renderer.end();
+  }
+
+  function pixelStats() {
+    var cw = canvas.width, ch = canvas.height;
+    var px = new Uint8Array(cw * ch * 4);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    function box() { return { minX: cw, maxX: -1, minY: ch, maxY: -1, n: 0, colored: 0 }; }
+    var lo = box(), hi = box();
+    for (var y = 0; y < ch; y++) {
+      var row = y * cw * 4;
+      for (var x = 0; x < cw; x++) {
+        var i = row + x * 4;
+        var a = px[i + 3], r = px[i], g = px[i + 1], b = px[i + 2];
+        function upd(bb) {
+          bb.n++;
+          if (x < bb.minX) bb.minX = x;
+          if (x > bb.maxX) bb.maxX = x;
+          if (y < bb.minY) bb.minY = y;
+          if (y > bb.maxY) bb.maxY = y;
+          if (r + g + b > 40) bb.colored++;
+        }
+        if (a > 8) upd(lo);
+        if (a > 96) upd(hi);
+      }
+    }
+    function fmt(tag, b) {
+      var w = b.maxX >= 0 ? b.maxX - b.minX + 1 : 0;
+      var h = b.maxY >= 0 ? b.maxY - b.minY + 1 : 0;
+      return tag + '=' + JSON.stringify({
+        n: b.n, colored: b.colored,
+        bbox: [b.minX, b.minY, b.maxX, b.maxY],
+        wPct: +(100 * w / cw).toFixed(1), hPct: +(100 * h / ch).toFixed(1),
+        areaPct: +(100 * w * h / (cw * ch)).toFixed(1),
+      });
+    }
+    return fmt('a8', lo) + ' ' + fmt('a96', hi);
+  }
+
+  function parseAtlasPages(text) {
+    var m, re = /^([^\r\n]+\.png)\s*$/gm, pages = [];
+    while ((m = re.exec(text))) pages.push(m[1]);
+    return pages;
+  }
+
+  function loadImages(paths) {
+    return Promise.all(paths.map(function (p) {
+      return new Promise(function (resolve, reject) {
+        var img = new Image();
+        img.onload = function () { resolve(img); };
+        img.onerror = function () { reject(new Error('img load fail ' + p)); };
+        img.src = BASE + p;
+      });
+    }));
+  }
+
+  async function boot() {
+    try {
+      if (q.get('clean') === '1') out.style.display = 'none';
+      var atlasText = await (await fetch(BASE + ATLAS)).text();
+      var pages = parseAtlasPages(atlasText);
+      var images = await loadImages(pages);
+      canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
+      gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
+      if (!gl) throw new Error('WebGL not supported');
+      var texMap = {};
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, BD2_PREMULTIPLY_UPLOAD);
+      pages.forEach(function (p, i) { texMap[p] = new spine.GLTexture(gl, images[i]); });
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, BD2_PREMULTIPLY_UPLOAD);
+      var atlas = new spine.TextureAtlas(atlasText);
+      atlas.pages.forEach(function (page) { page.setTexture(texMap[page.name] || texMap[pages[0]]); });
+      var loader = new spine.AtlasAttachmentLoader(atlas);
+      var skelBuf = await (await fetch(BASE + SKEL)).arrayBuffer();
+      data = new spine.SkeletonBinary(loader).readSkeletonData(new Uint8Array(skelBuf));
+      skeleton = new spine.Skeleton(data);
+      skeleton.setSkin(bestSkin(data));
+      skeleton.setSlotsToSetupPose();
+      skeleton.updateWorldTransform();
+      state = new spine.AnimationState(new spine.AnimationStateData(data));
+      renderer = new spine.SceneRenderer(canvas, gl, false);
+      var animNames = data.animations.map(function (a) { return a.name; });
+      var anim = pickAnim(data);
+      if (anim) state.setAnimation(0, anim, true);
+
+      // 1) t=0 姿态：与预览 buildScene 一致地计算取景并设相机
+      state.update(0); state.apply(skeleton); skeleton.updateWorldTransform();
+      markMaskSlots();
+      var items0 = collectItems();
+      var raw0 = boxesBounds(items0);
+      var cf = contentFrame(), daf = denseAreaFrame();
+      var finalBounds = computeBounds();
+      applyLayout();
+      // 诊断：按面积排序的 top 附件（t=0 姿态）
+      var tops = items0.map(function (it) {
+        return {
+          n: it.name,
+          a: Math.round((it.b.maxX - it.b.minX) * (it.b.maxY - it.b.minY)),
+          bb: [Math.round(it.b.minX), Math.round(it.b.minY), Math.round(it.b.maxX), Math.round(it.b.maxY)],
+        };
+      }).sort(function (x, y) { return y.a - x.a; }).slice(0, 14);
+      var rd = function (b) {
+        if (!b || !isFinite(b.minX)) return null;
+        return [Math.round(b.minX), Math.round(b.minY), Math.round(b.maxX), Math.round(b.maxY),
+          'w' + Math.round(b.maxX - b.minX), 'h' + Math.round(b.maxY - b.minY)];
+      };
+
+      // 2) 推进到 animtime 秒再采像素（相机不变，与预览一致：取景只算一次）
+      drawFrame();
+      var stats0 = pixelStats();
+      if (ANIMTIME > 0) {
+        state.update(ANIMTIME); state.apply(skeleton); skeleton.updateWorldTransform();
+        gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+        renderer.begin(); renderer.drawSkeleton(skeleton, true); renderer.end();
+      }
+      var statsAnim = pixelStats();
+
+      var info = {
+        probe: 'framing', asset: ASSET, anim: anim, anims: animNames,
+        animtime: ANIMTIME,
+        rawBounds: rd(raw0), contentFrame: rd(cf), denseAreaFrame: rd(daf),
+        finalBounds: rd(finalBounds),
+        canvas: [canvas.width, canvas.height],
+        slotNames: skeleton.slots.map(function (s) { return s.data.name; }),
+        maskDebug: window.__maskDebug || null,
+        topAttachments: tops,
+      };
+      setOut('BD2-READY ' + ASSET + '\n' + JSON.stringify(info) +
+        '\nSTATS_T0 ' + stats0 + '\nSTATS_ANIM ' + statsAnim);
+      document.title = 'BD2-READY ' + ASSET;
+    } catch (e) {
+      setOut('BOOT-ERR ' + (e && e.message || e) + '\n' + (e && e.stack || ''));
+      document.title = 'BD2-ERR ' + (e && e.message || e);
+    }
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>

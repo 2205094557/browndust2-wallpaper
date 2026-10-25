@@ -22,3 +22,11 @@ _tmp_*.txt
 # 无头验证产物（截图/服务目录）与本地探针数据，不入库
 tools/_spine41_shots/
 tools/_idle2_probe/
+# 背景超分 ncnn 二进制（waifu2x/Real-CUGAN/Real-ESRGAN，共 ~81MB）：与 vgmstream
+# 同策略，本地机器工具不入库，由 build_pack.py 自检保证打包版存在
+tools/realcugan-ncnn-vulkan/
+tools/realesrgan-ncnn-vulkan/
+tools/waifu2x-ncnn-vulkan/
+# mix 探针的导出产物与截图（可再生，不入库）
+tools/_mix_probe/_exp_out/
+tools/_mix_probe/screen.png

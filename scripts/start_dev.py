@@ -53,8 +53,8 @@ def _find_pythonw() -> Path:
 VENV_PY = _find_pythonw()
 VITE_JS = FRONTEND / "node_modules" / "vite" / "bin" / "vite.js"
 
-BACKEND_PORT = 8766
-VITE_PORT = 5173
+BACKEND_PORT = int(os.environ.get("BD2_BACKEND_PORT", "8766"))
+VITE_PORT = int(os.environ.get("BD2_VITE_PORT", "5173"))
 BACKEND_HEALTH_URL = f"http://127.0.0.1:{BACKEND_PORT}/api/health"
 VITE_URL = f"http://127.0.0.1:{VITE_PORT}/"
 
@@ -68,16 +68,20 @@ VITE_LOG = STATE_DIR / "vite.log"
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 # 识别本项目 dev 栈进程的命令行特征：
-#  - 后端：backend_server.py 8766（壳进程含 venv 路径，运行时子进程仅含脚本名）
-#  - 窗口：venv pythonw 启动 web_main.py（树杀可覆盖其运行时子进程）
+#  - 后端：<本项目解释器> backend_server.py [端口]（壳进程含 venv 路径，运行时子进程仅含脚本名）
+#  - 窗口：<本项目解释器> web_main.py [dev url]（树杀可覆盖其运行时子进程）
 #  - Vite：node 命令行里包含本项目 frontend 目录下的 vite.js 绝对路径
+#
+# 【必须按解释器目录限定脚本名规则】兄弟项目（如 D:\codex\azurlane-dynamic-wallpaper）
+# 同样以 `pythonw.exe backend_server.py 8766` / `web_main.py` 启动，只按脚本名匹配会把
+# 它们当成"本项目遗留进程"直接杀掉——实测会导致启动本工具时误杀碧蓝工具的后端。
+_PY_DIR = re.escape(str(VENV_PY.parent))
 DEV_PATTERNS = [
-    re.compile(re.escape(str(VENV_PY)) + r'.*backend_server\.py\s*$', re.I),
-    re.compile(r'backend_server\.py\s+8766\s*$', re.I),
-    re.compile(r'web_main\.py\s*$', re.I),
+    re.compile(_PY_DIR + r'[\\/]pythonw?\.exe"?\s.*backend_server\.py(\s+\d+)?\s*$', re.I),
+    re.compile(_PY_DIR + r'[\\/]pythonw?\.exe"?\s.*web_main\.py(\s|$)', re.I),
     re.compile(re.escape(str(FRONTEND)) + r'.*vite.*?\.js', re.I),
 ]
-WINDOW_RE = re.compile(r'web_main\.py\s*$', re.I)
+WINDOW_RE = DEV_PATTERNS[1]
 
 
 def log(msg: str) -> None:
@@ -245,8 +249,11 @@ def _log_tail(path: Path, lines: int = 25) -> str:
         return "(无日志)"
 
 
-def spawn(cmd: list[str], cwd: Path, log_file: Path | None = None) -> subprocess.Popen:
+def spawn(cmd: list[str], cwd: Path, log_file: Path | None = None,
+          env: dict | None = None) -> subprocess.Popen:
     kwargs: dict = {"cwd": str(cwd), "creationflags": CREATE_NO_WINDOW}
+    if env:
+        kwargs["env"] = {**os.environ, **env}
     if log_file is not None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         f = open(log_file, "ab", buffering=0)  # noqa: SIM115
@@ -297,6 +304,15 @@ def ensure_node() -> str:
     if not node:
         raise RuntimeError("未找到 node，请先安装 Node.js")
     return node
+
+
+def spawn_window() -> subprocess.Popen:
+    """启动桌面窗口并把 Vite 地址/后端端口传进去（端口可用环境变量覆盖）。"""
+    return spawn(
+        [str(VENV_PY), "web_main.py", VITE_URL],
+        ROOT,
+        env={"BD2_BACKEND_PORT": str(BACKEND_PORT)},
+    )
 
 
 def main() -> int:
@@ -354,7 +370,13 @@ def main() -> int:
     # 2) Vite
     node = ensure_node()
     log(f"启动 Vite {VITE_URL} ...")
-    vite = spawn([node, str(VITE_JS)], FRONTEND, VITE_LOG)
+    # 端口被覆盖时必须把 API 地址显式告诉前端（默认 8766 写在前端代码里）
+    vite = spawn(
+        [node, str(VITE_JS), "--port", str(VITE_PORT)],
+        FRONTEND,
+        VITE_LOG,
+        env={"VITE_API_BASE": f"http://127.0.0.1:{BACKEND_PORT}"},
+    )
     state = read_state()
     state["vite"] = vite.pid
     write_state(state)
@@ -366,7 +388,7 @@ def main() -> int:
 
     # 3) 窗口
     log("启动桌面窗口（web_main.py）...")
-    window = spawn([str(VENV_PY), "web_main.py"], ROOT)
+    window = spawn_window()
     state = read_state()
     state["window"] = window.pid
     write_state(state)
@@ -381,7 +403,7 @@ def main() -> int:
                 if uptime < 20 and restarts < 3:
                     restarts += 1
                     log(f"窗口异常退出（运行 {uptime:.0f}s），第 {restarts} 次自动重启 ...")
-                    window = spawn([str(VENV_PY), "web_main.py"], ROOT)
+                    window = spawn_window()
                     state = read_state()
                     state["window"] = window.pid
                     write_state(state)

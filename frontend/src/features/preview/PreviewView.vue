@@ -33,6 +33,7 @@
               </n-alert>
               <SpinePreview
                 v-if="currentSkin.type === 'spine' && currentSkin.asset"
+                ref="previewEl"
                 :key="currentSkin.key"
                 :skin="currentSkin"
                 :animation="animation"
@@ -40,10 +41,16 @@
                 :bg-scale="bgScale"
                 :offset-x="offsetX"
                 :offset-y="offsetY"
+                :char-offset-x="charOffsetX"
+                :char-offset-y="charOffsetY"
+                :bg-offset-x="bgOffsetX"
+                :bg-offset-y="bgOffsetY"
+                :rotation="rotation"
                 :alignment="alignment"
                 :interaction-mode="interactionMode"
                 :show-hit-areas="showHitAreas"
                 :intro="introOn"
+                :hide-default-bg="bgStyle !== 'auto'"
                 @animations="onSpineAnims"
                 @error="onEngineError"
                 @scale-change="scale = $event"
@@ -101,6 +108,22 @@
               <n-button size="tiny" quaternary @click="bgScale = 100">重置</n-button>
             </div>
             <span class="zoom-hint" style="position: static; display: block; margin-top: -4px">角色 {{ scale }}% · 背景 {{ bgScale }}%</span>
+
+            <div class="panel-title" title="只移动角色骨架，背景保持不动（区别于整体偏移）">角色位置（独立）</div>
+            <div class="charoffset-row">
+              <n-slider v-model:value="charOffsetX" :min="-100" :max="100" :step="1" style="flex: 1" />
+              <span class="bar-value" :class="{ zero: charOffsetX === 0 }">{{ charOffsetX > 0 ? '+' : '' }}{{ charOffsetX }}</span>
+            </div>
+            <div class="charoffset-row">
+              <n-slider v-model:value="charOffsetY" :min="-100" :max="100" :step="1" style="flex: 1" />
+              <span class="bar-value" :class="{ zero: charOffsetY === 0 }">{{ charOffsetY > 0 ? '+' : '' }}{{ charOffsetY }}</span>
+            </div>
+
+            <div class="panel-title" title="旋转人物（背景不动），正数=顺时针；导出壁纸保持此角度">人物旋转</div>
+            <div class="charoffset-row">
+              <n-slider v-model:value="rotation" :min="-180" :max="180" :step="1" style="flex: 1" />
+              <n-button size="tiny" quaternary @click="rotation = 0">重置</n-button>
+            </div>
 
             <div v-if="currentSkin.type === 'spine'" class="panel-title">交互模式</div>
             <div v-if="currentSkin.type === 'spine'" class="mode-toggle">
@@ -167,6 +190,12 @@
 
               <label>垂直偏移（占画布高 %）</label>
               <n-slider v-model:value="offsetY" :min="-100" :max="100" :step="1" />
+
+              <label>角色位置 · 水平（只移角色）</label>
+              <n-slider v-model:value="charOffsetX" :min="-100" :max="100" :step="1" />
+
+              <label>角色位置 · 垂直（只移角色）</label>
+              <n-slider v-model:value="charOffsetY" :min="-100" :max="100" :step="1" />
 
               <label>对齐方式</label>
               <n-select v-model:value="alignment" :options="[
@@ -248,6 +277,16 @@ const scale = ref(100)
 const bgScale = ref(100)
 const offsetX = ref(0)
 const offsetY = ref(0)
+const charOffsetX = ref(0)
+const charOffsetY = ref(0)
+// 人物旋转（度，正=顺时针）：只转人物层，导出壁纸保持此角度
+const rotation = ref(0)
+// 背景独立偏移（只移背景图，角色不动）：预览页暂无控件，恒为 0；
+// 保留状态并透传导出，避免将来加控件时与导出口径脱节（画廊页已有该控件）。
+const bgOffsetX = ref(0)
+const bgOffsetY = ref(0)
+// 预览组件实例：导出/应用时截图作为 WE 封面（与预览构图一致）
+const previewEl = ref(null)
 const alignment = ref('center')
 const layersVisible = ref(true)
 const interactionMode = ref(false)
@@ -404,12 +443,21 @@ async function doExport() {
   exportResult.value = null
   try {
     exportResult.value = await bridge.exportWallpaper(skin.ship, skin.bundle, skin.name, {
+      // 封面：截取当前预览画布（16:9），后端写成 preview.jpg，保证 WE 封面=预览所见
+      previewImage: (previewEl.value && typeof previewEl.value.capture === 'function'
+        ? previewEl.value.capture()
+        : null) || undefined,
       bg: bgStyle.value,
       bgColor: bgStyle.value === 'solid' ? solidColor.value || undefined : undefined,
       scale: scale.value,
       bgScale: bgScale.value,
       offsetX: offsetX.value,
       offsetY: offsetY.value,
+      charOffsetX: charOffsetX.value,
+      charOffsetY: charOffsetY.value,
+      bgOffsetX: bgOffsetX.value,
+      bgOffsetY: bgOffsetY.value,
+      rotation: rotation.value,
       alignment: alignment.value,
       animation: animation.value,
       // 预览页当前开关状态 → WE 侧默认值（编辑导入会覆盖，但一键应用保留）
@@ -434,12 +482,21 @@ async function doApply() {
   applyResult.value = null
   try {
     applyResult.value = await bridge.applyWallpaper(skin.ship, skin.bundle, skin.name, {
+      // 封面：截取当前预览画布（16:9），后端写成 preview.jpg，保证 WE 封面=预览所见
+      previewImage: (previewEl.value && typeof previewEl.value.capture === 'function'
+        ? previewEl.value.capture()
+        : null) || undefined,
       bg: bgStyle.value,
       bgColor: bgStyle.value === 'solid' ? solidColor.value || undefined : undefined,
       scale: scale.value,
       bgScale: bgScale.value,
       offsetX: offsetX.value,
       offsetY: offsetY.value,
+      charOffsetX: charOffsetX.value,
+      charOffsetY: charOffsetY.value,
+      bgOffsetX: bgOffsetX.value,
+      bgOffsetY: bgOffsetY.value,
+      rotation: rotation.value,
       alignment: alignment.value,
       animation: animation.value,
       // 预览页当前开关状态 → WE 侧默认值（一键应用保留，不会被编辑导入历史值覆盖）
@@ -609,6 +666,29 @@ async function doApply() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* 角色独立位置滑块行：滑块 + 实时数值并排，数值右对齐等宽数字，0 弱化 */
+.charoffset-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.charoffset-row .n-slider {
+  flex: 1;
+}
+
+.bar-value {
+  min-width: 40px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.bar-value.zero {
+  color: rgba(120, 120, 120, 0.45);
 }
 
 .skin-strip {

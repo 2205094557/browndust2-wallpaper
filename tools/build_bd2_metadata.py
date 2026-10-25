@@ -55,6 +55,17 @@ def resolve_assets_tsv(cli_value: str | None) -> Path:
 
 SORT_FALLBACK = 9999  # 图鉴序号 unavailable -> large number so it sorts last
 
+# 社区角色表里的小游戏/活动资产 id（非角色），与 NPC 一并从角色列表剔除
+_NON_CHARACTER_IDS = {"minigame1"}
+
+
+def is_npc_entry(uid: str, meta: dict) -> bool:
+    """社区角色表标记的非可玩条目：小游戏资产 id，或 charName 含 '(Npc)'（不区分大小写）。"""
+    if uid in _NON_CHARACTER_IDS:
+        return True
+    name = (meta or {}).get("charName") or ""
+    return bool(re.search(r"\(\s*npc\s*\)", name, re.IGNORECASE))
+
 # --- asset-key patterns (all applied to lower-cased keys) -------------------
 
 # UI/Prefabs/Spine/IllustSpine/illust_char003892_190.prefab  (+ Censorship/ subpath)
@@ -142,6 +153,43 @@ def load_character_list(ts_path: Path) -> dict:
     return json.loads(text)
 
 
+def load_character_fallback() -> dict:
+    """社区角色表（BD2-L2D-Viewer）缺失时的降级底表。
+
+    该表未随仓库/安装包分发（原路径在开发机研究目录），直接报 FileNotFoundError
+    会让「设置→更新图鉴」整个 500。降级策略：用上次构建的 characters.json 里的
+    名字/关系（id→charName/costumeName/dating/cutscene/spine）当底表，目录资产
+    照常全量重建——老条目保名保关系，目录里新出现的 id 仍走 Unknown 追加，
+    最后 BD2DB 中文名照常叠加。首次全新安装（无 characters.json）时为 {}，
+    所有目录 id 一律 Unknown，不抛错。
+    """
+    meta: dict = {}
+    try:
+        data = json.loads((METADATA_DIR / "characters.json").read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return meta
+    for e in data:
+        uid = str(e.get("id") or "").strip()
+        if not uid or not uid.isdigit():
+            continue
+        char_name = e.get("char") or "Unknown"
+        costume_name = e.get("costume") or "Unknown"
+        # 历史遗留：旧版把所有未命名角色统一写成 "Unknown"，读回时会继续合并成
+        # 一个图鉴条目。这里改成按 id 的可区分占位名，让每个未知角色独立成条目。
+        if char_name == "Unknown":
+            char_name = f"未知角色 {uid}"
+        if costume_name == "Unknown":
+            costume_name = f"未知服装 {uid}"
+        meta[uid] = {
+            "charName": char_name,
+            "costumeName": costume_name,
+            "spine": e.get("spine") or "",
+            "dating": e.get("dating") or "",
+            "cutscene": e.get("cutscene") or "",
+        }
+    return meta
+
+
 def pick_special_prefab(uid: str, special: list[tuple[str, str]]) -> str:
     """Pick the best IllustSpecial key containing this char id.
 
@@ -192,10 +240,19 @@ def build_entry(uid: str, meta: dict, assets: AssetIndex) -> dict:
         if not m or f"illust_dating{m.group(1)}" not in assets.dating:
             dating = ""  # community table claims dating but the prefab is not in the catalog
 
+    char_name = (meta.get("charName") or "").strip() or "Unknown"
+    costume_name = (meta.get("costumeName") or "").strip() or "Unknown"
+    # 兜底：任何来源（社区表缺名 / 旧 characters.json / 全新安装）都不留 "Unknown"
+    # 作为显示名——否则多个未知角色会被 build_ships 合并成一个条目。
+    if char_name == "Unknown":
+        char_name = f"未知角色 {base}"
+    if costume_name == "Unknown":
+        costume_name = f"未知服装 {base}"
+
     return {
         "id": uid,
-        "char": meta.get("charName") or "Unknown",
-        "costume": meta.get("costumeName") or "Unknown",
+        "char": char_name,
+        "costume": costume_name,
         "spine": meta.get("spine") or f"char{base}",
         "dating": dating,
         "cutscene": f"cutscene_char{base}" if has_cutscene else (meta.get("cutscene") or ""),
@@ -208,12 +265,23 @@ def build_entry(uid: str, meta: dict, assets: AssetIndex) -> dict:
 
 
 def build_unknown_entry(uid: str, assets: AssetIndex) -> dict:
+    """社区名表缺失的角色：用 id 生成可区分的占位名。
+
+    旧实现一律写 "Unknown"，build_ships 会把所有未知角色合并成同一个 "Unknown"
+    图鉴条目（多个皮肤堆在一起分不清是谁）。现在按 id 独立命名：
+      角色 = "未知角色 021291"，服装 = "未知服装 021291"
+    每个未知角色在软件里是独立条目，可单独预览/下载/搜 ID。
+    char_en/costume_en 保留 "Unknown" 作为「待补名」标记（apply_cn_names 按 id
+    精确改名，不依赖显示名）。
+    """
     spine = assets.spine.get(uid)
     static = assets.static.get(uid)
     return {
         "id": uid,
-        "char": "Unknown",
-        "costume": "Unknown",
+        "char": f"未知角色 {uid}",
+        "costume": f"未知服装 {uid}",
+        "char_en": "Unknown",
+        "costume_en": "Unknown",
         "spine": f"char{uid}",
         "dating": "",
         "cutscene": f"cutscene_char{uid}" if uid in assets.cutscene else "",
@@ -261,7 +329,9 @@ def apply_cn_names(entries: list[dict], cn_by_id: dict) -> tuple[int, int]:
         rec = cn_by_id.get(e["id"])
         if rec:
             cn = (rec.get("char_cn") or "").strip()
-            if cn:
+            # 未命名角色（char_en == "Unknown"，显示名为「未知角色 <id>」）不能进投票：
+            # 它们彼此无关，按名投票会把多个角色并成同一个中文名。named 角色按英文名统一改名
+            if cn and e.get("char_en") != "Unknown":
                 votes.setdefault(e["char"], cn)
 
     char_n = skin_n = 0
@@ -270,15 +340,25 @@ def apply_cn_names(entries: list[dict], cn_by_id: dict) -> tuple[int, int]:
             e["char_en"] = e["char"]
         if e.get("costume_en") is None:
             e["costume_en"] = e["costume"]
-        cn_char = votes.get(e["char_en"], "").strip()
-        if cn_char and cn_char != e["char"]:
-            e["char"] = cn_char
-            char_n += 1
         rec = cn_by_id.get(e["id"])
-        cn_cost = (rec or {}).get("name_cn", "").strip()
-        if cn_cost and cn_cost != e["costume"]:
-            e["costume"] = cn_cost
-            skin_n += 1
+        if e["char_en"] == "Unknown" and rec and (rec.get("char_cn") or "").strip():
+            # 未命名角色各自独立（显示名「未知角色 <id>」），不能按名投票合并；
+            # 按本 id 的 BD2DB 记录直接改名。char_en 保留 Unknown 防再轮询。
+            e["char"] = rec["char_cn"].strip()
+            char_n += 1
+            cn = (rec.get("name_cn") or "").strip()
+            if cn:
+                e["costume"] = cn
+                skin_n += 1
+        else:
+            cn_char = votes.get(e["char_en"], "").strip()
+            if cn_char and cn_char != e["char"]:
+                e["char"] = cn_char
+                char_n += 1
+            cn_cost = (rec or {}).get("name_cn", "").strip()
+            if cn_cost and cn_cost != e["costume"]:
+                e["costume"] = cn_cost
+                skin_n += 1
     return char_n, skin_n
 
 
@@ -296,12 +376,24 @@ def main() -> None:
     assets_path = resolve_assets_tsv(args.assets)
 
     t0 = time.time()
-    char_list = load_character_list(Path(args.character_list))
+    char_list_path = Path(args.character_list)
+    fallback = False
+    if not char_list_path.exists():
+        char_list = load_character_fallback()
+        fallback = True
+        print(f"[warn] 社区角色表缺失（{char_list_path}），使用上次 characters.json 降级底表"
+              f"（{len(char_list)} 条），新服装 id 将记为 Unknown。", flush=True)
+    else:
+        char_list = load_character_list(char_list_path)
     assets = index_assets(assets_path)
 
     entries = []
     known_ids = set(char_list)
+    skipped_npc = 0
     for uid, meta in char_list.items():
+        if is_npc_entry(uid, meta):
+            skipped_npc += 1
+            continue
         entries.append(build_entry(uid, meta, assets))
 
     unknown_ids = sorted(set(assets.spine) - known_ids)
@@ -338,7 +430,9 @@ def main() -> None:
     print(f"elapsed        : {time.time() - t0:.2f}s")
     print("-" * 60)
     print(f"characters.json: {len(entries)} entries "
-          f"({len(char_list)} from community table + {len(unknown_ids)} appended Unknown)")
+          f"({len(char_list) - skipped_npc} from {'previous characters.json fallback' if fallback else 'community table'}"
+          f" + {len(unknown_ids)} appended Unknown)")
+    print(f"  skipped NPC  : {skipped_npc}")
     print(f"  with spine   : {with_spine}")
     print(f"  with dating  : {with_dating}")
     print(f"  with cutscene: {with_cutscene}")

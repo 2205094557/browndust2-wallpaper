@@ -13,6 +13,7 @@
   'use strict'
 
   var MARGIN = 0.98 // 模型包围盒最多占画布 98%（撑满预览框，参照 azurlane.nagami.moe）
+  var ASPECT = 16 / 9 // 画布宽高比（预览 stage 恒为此比例；WE 侧按此推导等效取景框）
   var MIN_SCALE = 20
   var MAX_SCALE = 300
   var MAX_OFFSET = 100
@@ -37,6 +38,69 @@
     return clamp(pct == null ? 0 : pct, -MAX_OFFSET, MAX_OFFSET)
   }
 
+  /*
+   * 角色/背景独立偏移（世界坐标）：与 spineCamera 的偏移语义一致。
+   * offsetX/offsetY 为画布宽/高百分比（±100），返回世界坐标偏移量。
+   * 尺寸必须与 spineCamera 用同一个 16:9 取景框（见 viewportFrame），
+   * 否则 WE 侧偏移量会随显示器宽高比漂移，与预览不一致。
+   */
+  function charOffsetWorld(offsetX, offsetY, canvasW, canvasH, zoom) {
+    var frame = viewportFrame(canvasW, canvasH)
+    return {
+      x: (clampOffset(offsetX) / 100) * frame.w * zoom,
+      y: (clampOffset(offsetY) / 100) * frame.h * zoom,
+    }
+  }
+
+  /*
+   * 人物旋转（度，正 = 屏幕顺时针）：渲染端把旋转并入相机投影（只转人物层，
+   * 背景不转）所需的两个纯函数，预览 SpinePreview 与导出模板共用。
+   */
+
+  /*
+   * 绕世界点 (px,py) 旋转 deg 的 4x4 变换，返回**列主序 16 值数组**
+   * （与 spine OrthoCamera.projectionView.values 同布局），渲染端把它右乘进
+   * projectionView：PV' = PV × M —— 顶点先经世界旋转再进相机。
+   * 世界坐标 y 向上，屏幕顺时针 = 世界数学负角。
+   */
+  function charRotationMatrixValues(deg, px, py) {
+    var t = (-(deg || 0) * Math.PI) / 180
+    var c = Math.cos(t)
+    var s = Math.sin(t)
+    var tx = px - (px * c - py * s)
+    var ty = py - (px * s + py * c)
+    // col0=(c,s,0,0) col1=(-s,c,0,0) col2=(0,0,1,0) col3=(tx,ty,0,1)
+    return [c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, tx, ty, 0, 1]
+  }
+
+  /*
+   * bounds 绕 (px,py) 旋转 deg 后的 AABB（四角旋转取包络）。取景框随旋转
+   * 外扩，保证任意角度人物完整可见；与 charRotationMatrixValues 同一符号约定。
+   */
+  function rotateBoundsAabb(bounds, deg, px, py) {
+    var d = (deg || 0) % 360
+    if (!d || !bounds) return bounds
+    var t = (-d * Math.PI) / 180
+    var c = Math.cos(t)
+    var s = Math.sin(t)
+    var xs = [bounds.minX, bounds.maxX]
+    var ys = [bounds.minY, bounds.maxY]
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (var i = 0; i < 2; i++) {
+      for (var j = 0; j < 2; j++) {
+        var dx = xs[i] - px
+        var dy = ys[j] - py
+        var x = px + dx * c - dy * s
+        var y = py + dx * s + dy * c
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+    return { minX: minX, maxX: maxX, minY: minY, maxY: maxY }
+  }
+
   function fitFactor(scalePct) {
     return clampScale(scalePct) / 100
   }
@@ -47,9 +111,52 @@
   }
 
   /*
+   * 取景框尺寸（16:9 单一事实来源）。
+   *
+   * 预览端画布恒为 16:9（stage 由 fitStage 约束）；Wallpaper Engine 侧画布是
+   * 100vw×100vh，宽高比随显示器而变（16:10 / 21:9 …）。而 spineCamera 只按
+   * **高度**归一化（fitZoom = h/(canvasH*MARGIN)），偏移量也按画布宽/高的百分比
+   * 换算——直接用实际画布尺寸会让同一组 scale/offset 在 WE 上呈现不同的
+   * 人物视觉大小与位置（"预览和导出不一致"的根因）。
+   *
+   * 方案（用户确认「裁切保持构图一致」）：**始终按 16:9 取景框布局，再等比放大
+   * 铺满实际画布并裁掉多余部分**（见 coverZoomFactor）。取景框以画布长边为基准：
+   *   - 宽屏（21:9）：按高度定框（w = h*16/9），左右裁掉超出的世界；
+   *   - 高屏（16:10 / 4:3）：按宽度定框（h = w*9/16），上下裁掉超出的世界；
+   *   - 恰好 16:9：返回入参，预览端行为零变化（coverZoomFactor 恒为 1）。
+   * 这样人物在屏幕上的**相对大小与位置**与预览完全一致，宽高比差异只体现为裁切。
+   */
+  function viewportFrame(canvasW, canvasH) {
+    var w = Math.max(1, canvasW || 1)
+    var h = Math.max(1, canvasH || 1)
+    if (Math.abs(w / h - ASPECT) < 1e-3) return { w: w, h: h }
+    // 16:9 画布铺满实际画布所需的放大系数（cover）：取两个方向比例的较大者
+    var cover = Math.max(w / (h * ASPECT), (h * ASPECT) / w)
+    return { w: w / cover, h: h / cover }
+  }
+
+  /*
+   * 把 16:9 取景框等比放大铺满实际画布的系数（cover 语义）。
+   * spineCamera 返回的 zoom 是「取景框像素/世界单位」；要让取景框铺满更大的
+   * 实际画布，相机**视野要变大**（zoom 变小），所以 zoom 要除以该系数。
+   * 预览端画布本身 16:9，恒返回 1。
+   */
+  function coverZoomFactor(canvasW, canvasH) {
+    var w = Math.max(1, canvasW || 1)
+    var h = Math.max(1, canvasH || 1)
+    if (Math.abs(w / h - ASPECT) < 1e-3) return 1
+    var frame = viewportFrame(w, h)
+    return w / frame.w // = h / frame.h（等比，两者相等）
+  }
+
+  /*
    * Spine：把模型包围盒放进画布，返回相机参数（world 坐标）。
    * zoom 为“像素/世界单位”，越大看到的区域越大、模型越小，
    * 所以缩放比例作为除数：zoom = fitZoom / scaleFactor。
+   *
+   * 画布非 16:9 时（WE 全屏）：先按 16:9 取景框算出 zoom，再乘 cover 系数把
+   * 取景框等比铺满实际画布（多余部分裁掉）。返回的 zoom 已是**实际画布**的
+   * 像素/世界单位，调用方无需再换算；x/y 保持取景框中心语义（铺满后中心不变）。
    */
   function spineCamera(bounds, canvasW, canvasH, opts) {
     opts = opts || {}
@@ -58,15 +165,21 @@
     var oy = clampOffset(opts.offsetY)
     var ax = opts.alignX != null ? opts.alignX : 0.5
     var ay = opts.alignY != null ? opts.alignY : 0.5
+    // 统一按 16:9 取景框布局（见 viewportFrame），保证预览与 WE 构图一致
+    var frame = viewportFrame(canvasW, canvasH)
+    var cover = coverZoomFactor(canvasW, canvasH)
+    canvasW = frame.w
+    canvasH = frame.h
     var w = Math.max(1e-3, bounds.maxX - bounds.minX)
     var h = Math.max(1e-3, bounds.maxY - bounds.minY)
     var cx = (bounds.maxX + bounds.minX) / 2
     var cy = (bounds.maxY + bounds.minY) / 2
     // 统一缩放基准：scale=100 时按高度铺满到 MARGIN（所有皮肤高度一致），
     // 宽度自然留白（横场景留宽、竖场景留高）。此前用 max(宽,高) 约束导致
-    // 不同皮肤分别按宽/高贴满，scale=100 视觉大小不一致。
+    // 不同皮肤分别按宽/高贴图，scale=100 视觉大小不一致。
     var fitZoom = h / (canvasH * MARGIN)
-    var zoom = Math.max(1e-6, fitZoom / scale)
+    // cover：取景框铺满更大的实际画布 → 视野变大（zoom 变小），多余部分裁掉
+    var zoom = Math.max(1e-6, fitZoom / scale) / cover
     var slackW = canvasW * zoom - w
     var slackH = canvasH * zoom - h
     return {
@@ -93,6 +206,43 @@
       x: (modelW * sx) / 2 + ax * (canvasW - modelW * sx) + ((ox / 100) * canvasW),
       y: (modelH * sx) / 2 + ay * (canvasH - modelH * sx) + ((oy / 100) * canvasH),
     }
+  }
+
+  /*
+   * BD2 Ultimate 演出「阶段背景」选择：动画名 → 背景组号（1..maxSet）。
+   * 演出骨架动画结构 chain/cut_A..C/loop/loop_N，每阶段配一组 backN：
+   *   - 尾号：loop_2 / loop2 / cut_1 / loop_3 … → 尾部数字即组号；
+   *   - 阶段字母可出现在三处（2026-10 实测 12 个演出皮用前缀/小写命名，此前
+   *     全部映射组 1 =「切动画背景不会换」）：
+   *       前缀  A_cut / B_cut_idle / A_loop      （字母开头 + 下划线）
+   *       中缀  cut_A_fire / cut_a_hand          （_X_ 两侧下划线，取最左：
+   *             阶段字母在变体后缀之前——cut_a_hand_f 取 a 不取 f）
+   *       尾缀  cut_B / cut_a                    （_X 结尾，大小写都认）
+   *   - 无号（chain/loop/cut 无尾号的 cut/ all/panties_* 变体）：组 1。
+   * 预览 SpinePreview.vue、壁纸模板与 GalleryView 共用，保证三端切背景一致。
+   */
+  function bgSetForAnim(name, maxSet) {
+    if (!name) return 1
+    var cap = Math.max(1, maxSet || 1)
+    var m
+    // 1) 下划线锚定的尾号（旧版语义，cut_A_2/cut_A_3 这类「字母+尾号」并存时
+    //    尾号是阶段——老皮肤实测行为，必须最优先保持）
+    m = /(?:^|_)(\d+)$/.exec(name)  // loop_2 / cut_1 / cut_A_2
+    if (m) return Math.min(parseInt(m[1], 10), cap)
+    // 2) 前缀单字母：A_cut / B_cut_idle / C_loop / A_cut_w1（变体尾缀不干扰）
+    m = /^([A-Za-z])_/.exec(name)
+    if (m) return Math.min(m[1].toUpperCase().charCodeAt(0) - 64, cap)
+    // 3) 中缀 _X_（取最左，阶段字母在变体后缀之前）：cut_B_fire / cut_a_hand
+    m = /_([A-Za-z])_/.exec(name)
+    if (m) return Math.min(m[1].toUpperCase().charCodeAt(0) - 64, cap)
+    // 4) 尾缀 _X（大小写都认）：cut_B / cut_a
+    m = /_([A-Za-z])$/.exec(name)
+    if (m) return Math.min(m[1].toUpperCase().charCodeAt(0) - 64, cap)
+    // 5) 紧贴尾号（字母后直接跟数字，前面无规则命中才认）：loop2 / cut_B2
+    //    —— 不匹配 w1/v2 等已含字母规则的变体（那些在规则 2/3 已返回）
+    m = /([A-Za-z])(\d+)$/.exec(name)
+    if (m) return Math.min(parseInt(m[2], 10), cap)
+    return 1
   }
 
   /*
@@ -307,16 +457,23 @@
 
   root.WallpaperLayout = {
     MARGIN: MARGIN,
+    ASPECT: ASPECT,
     MIN_SCALE: MIN_SCALE,
     MAX_SCALE: MAX_SCALE,
     MAX_OFFSET: MAX_OFFSET,
     ALIGN_ORDER: ALIGN_ORDER,
     ALIGNMENTS: ALIGNMENTS,
+    viewportFrame: viewportFrame,
+    coverZoomFactor: coverZoomFactor,
     clampScale: clampScale,
     clampOffset: clampOffset,
     fitFactor: fitFactor,
     anchor: anchor,
+    charOffsetWorld: charOffsetWorld,
     spineCamera: spineCamera,
+    charRotationMatrixValues: charRotationMatrixValues,
+    rotateBoundsAabb: rotateBoundsAabb,
+    bgSetForAnim: bgSetForAnim,
     l2dLayout: l2dLayout,
     setupL2DHitAreas: setupL2DHitAreas,
     l2dInteraction: l2dInteraction,

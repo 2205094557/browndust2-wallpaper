@@ -19,17 +19,37 @@
   // BD2 有两代互动立绘命名体系：
   //   第一代（主立绘 + 早期约会，如 illust_dating2）：idle / motion / _face0..N (+_talk)
   //     → 表情反应叠加 track1，body 保持 idle 循环
-  //   第二代（互动约会，如 illust_dating14 Hedonist·约会 实测）：
-  //     idle1/idle2 + mix{1,2}_N_M（几十组互动反应演出）+ motion1_N
-  //     → 整段演出走 track0 单发，播完回待机循环
+//   第二代（互动约会，如 illust_dating11/dating14/18 实测）：
+//     idle1..N + mix{K}_(步)_[变体][_{long|loop|end}] + motion{K}_*
+//     → 章节图行走（见 _decideInner 内注释）：mix 步进回本章 idleK；
+//       motion 是【从本章 idleK 出发的过渡桥】（宿主 computeMotionTargets 用
+//       附件状态指纹实测其终态，如 dating11 的 1_9→idle2、2_1→idle3、3_0→idle2），
+//       播完待机=终态章 idle，指针推进；目标=本章的 motion 是章内反应。
   // 返回 profile.style ∈ 'face' | 'mix' | 'none'（bd2 布尔保留兼容旧调用）。
+
+  // mix 段名语法（dating11/14/18/20/21 实测并集）：
+  //   mix{章}_{步}[_{变体}][_{修饰}]，修饰 ∈ long|loop|end（long/loop 可带序号：
+  //   mix1_1_long1..long20 + loop1..loop20 = 长演出分段+各自停留循环）。
+  // 返回 { chap, step, variant(0=无), mod(0=无,1=long,2=loop,3=end), modN } 或 null。
+  function parseMixName(n) {
+    var m = /^mix(\d+)_(\d+)(?:_(\d+))?(?:_(long|loop|end)(\d*))?$/.exec(n);
+    if (!m) return null;
+    var modMap = { long: 1, loop: 2, end: 3 };
+    return {
+      chap: parseInt(m[1], 10),
+      step: parseInt(m[2], 10),
+      variant: m[3] ? parseInt(m[3], 10) : 0,
+      mod: m[4] ? modMap[m[4]] : 0,
+      modN: m[5] ? parseInt(m[5], 10) : 0,
+    };
+  }
 
   function detect(animNames) {
     var faces = [];
     var faceTalk = [];
     var hasMotion = false;
     var hasIdleTalk = false;
-    var mixPools = {};        // { "1": [mix1_N_M,...], "2": [...] }
+    var mixPools = {};        // { "1": [mix1_...], "2": [...] }
     var idles = [];           // 第二代多待机：['idle1','idle2']
     var motions = [];         // 第二代整身动作：motion1_22 等
     for (var i = 0; i < animNames.length; i++) {
@@ -41,17 +61,23 @@
       else if (/^idle\d*$/i.test(n)) idles.push(n);
       else if (/^motion\d+(_\d+)?$/i.test(n)) motions.push(n);
       else {
-        var mm = /^(mix\d+)_(?:\d+)_(?:\d+)$/.exec(n);
+        var mm = parseMixName(n);
         if (mm) {
-          if (!mixPools[mm[1]]) mixPools[mm[1]] = [];
-          mixPools[mm[1]].push(n);
+          var key = 'mix' + mm.chap;
+          if (!mixPools[key]) mixPools[key] = [];
+          mixPools[key].push(n);
         }
       }
     }
     faces.sort(function (a, b) {
       return parseInt(a.slice(5), 10) - parseInt(b.slice(5), 10);
     });
-    var style = faces.length > 0 ? 'face' : (Object.keys(mixPools).length > 0 ? 'mix' : 'none');
+    var style = faces.length > 0 ? 'face'
+      : ((Object.keys(mixPools).length > 0 || motions.length > 0) ? 'mix'
+      : (hasMotion ? 'motion' : 'none'));
+    // style 'motion'（2026-10 新世代互动皮肤实测，如魔都精兵联动 Special Date）：
+    //   骨架只有 idle + motion（无 _faceN 无 mix），槽位带 *_touch 触点标记——
+    //   点击播 motion 整身反应，与第一代表情皮同源但无表情可叠。
     return {
       bd2: style !== 'none', style: style,
       faces: faces, faceTalk: faceTalk,
@@ -201,6 +227,10 @@
   }
 
   function _decideInner(profile, zone, opts, now) {
+    if (profile.style === 'motion') {
+      // 新世代互动皮肤（idle + motion）：点击播 motion 整身反应
+      return { zone: zone, anim: 'motion', mode: 'full' };
+    }
     if (profile.style === 'face') {
       var pool = profile.faces;
       if (!pool.length) return null;
@@ -216,52 +246,176 @@
       };
     }
 
-    // mix 风格（第二代互动约会）：官方全局顺序播放——
-    //   章节 k 的所有 mix 步进（每步回 idleK）→ 然后【motionK 过渡桥】
-    //  （第 k 章全部 mix 走完后的那次点击先播 motion 变体，播完切到 idle(K+1)）
-    //   → 进入章节 K+1 的 mix 循环……最后一张的桥切回第一章（循环）。
-    // 排序必须按数值而非字典序（mix1_20 在 mix1_3 之后）；章节↔待机按数字匹配。
+    // mix 风格（第二代互动约会）：章节模型（2026-08 附件状态指纹实测，dating11/dating14）：
+    //   - 章节 = idle{K} + 内容（mix{K} 剧情段 和/或 motion{K}_* 反应动画）；
+    //     没有对应 idle 的编号不成章（无处待机）。
+    //   - mix{K}↔idle{K} 按数字配对（mix3_1_1 单播结束态=idle3 状态，0 槽位差）；
+    //     mix 片段自带 t=0 附件键，跨章节播放时自己建立本章状态，无需过场桥。
+    //   - motion{K}_* 是第 K 章的点击反应，起止状态都在本章（motion1_9 起止≈idle1、
+    //     motion3_0 起止=idle3）——【不是】章节间的过渡桥；旧版把它们当桥播完硬切
+    //     下一章 idle，造成状态相差 200+ 附件槽的大跳变（"闪现别的 idle"的根源）。
+    //   - 每章的步进序列 = mix{K} 各步（数值序；数字变体在前，long 分段随后、
+    //     loop 停留段配对为前一步的 hold——播完循环 hold 等下次点击而非回 idle，
+    //     end 收尾垫底）+ motion{K} 反应（seq 序）追加在本章末尾，
+    //     每步播完回本章 idle{K}（有 hold 则循环 hold）。
+    //   - 章末不插桥：下一步自然进入 K+1 章的首段（其 t=0 附件键完成状态切换）。
+    //   排序必须按数值而非字典序（mix1_20 在 mix1_3 之后）。
     if (!profile._playlist) {
-      var chapters = Object.keys(profile.mixPools).map(function (g) {
-        return parseInt(g.replace('mix', ''), 10);
-      }).sort(function (a, b) { return a - b; });
-      var motionsByChap = {};
+      var idleOfNum = {};
+      for (var q = 0; q < profile.idles.length; q++) {
+        var im = /^idle(\d+)$/.exec(profile.idles[q]);
+        if (im) idleOfNum[parseInt(im[1], 10)] = profile.idles[q];
+      }
+      var mixByChap = {};
+      Object.keys(profile.mixPools).forEach(function (g) {
+        var num = parseInt(g.replace('mix', ''), 10);
+        mixByChap[num] = (profile.mixPools[g] || []).map(function (n) {
+          var pm = parseMixName(n);
+          if (!pm) return null;
+          // 排序：同一步内，数字变体(_1/_2)在前（按变体号），修饰变体在后——
+          // long/loop 按 modN 配对交错（long1→loop1→long2→loop2…），end 收尾垫底
+          var grp = pm.variant > 0 ? 0 : 1;
+          return {
+            n: n, step: pm.step, mod: pm.mod, modN: pm.modN,
+            k1: grp, k2: grp === 0 ? pm.variant : pm.modN, k3: pm.mod,
+            hold: null,
+          };
+        }).filter(Boolean).sort(function (a, b) {
+          return (a.step - b.step) || (a.k1 - b.k1) || (a.k2 - b.k2) || (a.k3 - b.k3);
+        });
+        // loop 停留段配对：挂到同一步内、同 modN、排序紧邻其前的那个变体上
+        // （long1→loop1）；它不作为独立步进（避免重复播放）。
+        for (var li = 0; li < mixByChap[num].length; li++) {
+          var e = mixByChap[num][li];
+          if (e.mod !== 2) continue;
+          for (var lj = li - 1; lj >= 0; lj--) {
+            var p = mixByChap[num][lj];
+            if (p.step !== e.step || p.modN !== e.modN || p.mod === 2) continue;
+            p.hold = e.n;
+            e.consumed = true;
+            break;
+          }
+        }
+      });
+      var motByChap = [];
       for (var mi = 0; mi < profile.motions.length; mi++) {
         var mm2 = /^motion(\d+)(?:_(\d+))?$/.exec(profile.motions[mi]);
         if (!mm2) continue;
-        var chap = parseInt(mm2[1], 10);
-        if (!motionsByChap[chap]) motionsByChap[chap] = [];
-        motionsByChap[chap].push({ name: profile.motions[mi], seq: parseInt(mm2[2] || '0', 10) });
+        motByChap.push({
+          chap: parseInt(mm2[1], 10),
+          name: profile.motions[mi],
+          seq: parseInt(mm2[2] || '0', 10),
+        });
       }
+      // 章节编号 = 有 mix 池或有 motion 的编号 ∩ 有对应 idle 的编号
+      // （注意 motByChap 是数组，章节号要取条目的 chap 字段，不能拿数组下标）
+      var chapSeen = {};
+      Object.keys(mixByChap).forEach(function (k) { chapSeen[k] = 1; });
+      for (var cm = 0; cm < motByChap.length; cm++) chapSeen[motByChap[cm].chap] = 1;
+      var chapters = Object.keys(chapSeen).map(Number)
+        .filter(function (n) { return idleOfNum[n]; })
+        .sort(function (a, b) { return a - b; });
+      // 【章节推进（默认开）】点击按章节图行走推进故事：本章 mix 步进 → 章内反应
+      // → 过桥进下一章（桥的终态即新章待机，全程附件连续——已实测打断/自然播完
+      // 均 0 残留）。"点着点着待机变了"是故事推进的正常表现。
+      var LOCK_CHAPTER = false;
+      if (LOCK_CHAPTER && chapters.length > 1) chapters = [chapters[0]];
+      // 章↔待机配对：宿主实测的 homeIdle 优先（dating20 等皮肤故事链整体错一章，
+      // 按数字回待机会闪现真正别章的样子），缺省回退按数字
+      function homeIdleOf(ch) {
+        return (profile.homeIdle && profile.homeIdle[ch]) || idleOfNum[ch];
+      }
+      var homeToChap = {};
+      for (var hc = 0; hc < chapters.length; hc++) {
+        var h = homeIdleOf(chapters[hc]);
+        if (h != null && homeToChap[h] == null) homeToChap[h] = chapters[hc];
+      }
+      // motion 分拣（目标由宿主 computeMotionTargets 实测，缺省=本章反应）：
+      //   目标 idle = 本章的实测家 → 章内反应（播完回本章待机）；
+      //   目标 idle = 别章的家 → 过场桥（仅锁章模式关闭时用于章节推进；
+      //     锁章模式下跨章桥直接不进播放列表——没有章节推进，桥就是孤儿动画）
+      var targets = profile.motionTargets || {};
+      function chapterOfIdleName(name) {
+        var ch = name ? homeToChap[name] : null;
+        return ch != null ? ch : null;
+      }
+      var motionsOf = {};
+      for (var co = 0; co < chapters.length; co++) motionsOf[chapters[co]] = { react: [], bridge: [] };
+      for (var mi2 = 0; mi2 < motByChap.length; mi2++) {
+        var src = motByChap[mi2].chap;
+        if (!motionsOf[src]) continue;
+        var tn = motByChap[mi2].name;
+        var tChap = chapterOfIdleName(targets[tn]);
+        if (tChap != null && tChap !== src) {
+          if (!LOCK_CHAPTER) motionsOf[src].bridge.push({ name: tn, seq: motByChap[mi2].seq, to: tChap, idle: targets[tn] || homeIdleOf(tChap) });
+        } else if (LOCK_CHAPTER && (profile.motionReturnDist || {})[tn] > 30) {
+          // 锁章模式：跨章桥播完拽回家会闪（距离过大），不进播放列表
+          continue;
+        } else {
+          motionsOf[src].react.push({ name: tn, seq: motByChap[mi2].seq });
+        }
+      }
+      for (var ck in motionsOf) {
+        motionsOf[ck].react.sort(function (a, b) { return a.seq - b.seq; });
+        motionsOf[ck].bridge.sort(function (a, b) { return a.seq - b.seq; });
+      }
+      // 章节图行走：播本章 mix 步进 → 本章反应 → 过一座桥（指针落到目标章；
+      // 多桥按访问次数轮换）。桥的目标章必须【尚未访问】才走（否则全部内容
+      // 访问完毕前不提前回环，防止 2→1 这类回基地桥把未访问章节绕过去）；
+      // 全部章节都访问过后桥自由轮换。无桥时按编号推进到下一个【未访问】章
+      // （其首段 t=0 附件键自行建立状态）。播放列表循环取用（%length）。
       var playlist = [];
-      function chapterIdleOf(chapIdx) {
-        var name = profile.idles[0] || 'idle';
-        for (var q = 0; q < profile.idles.length; q++) {
-          var im = /^idle(\d+)$/.exec(profile.idles[q]);
-          if (im && parseInt(im[1], 10) === chapIdx) { name = profile.idles[q]; break; }
+      var cur = chapters[0];
+      var visit = {};
+      var seenChap = {};
+      var rot = 0; // 全部章节访问完后的全局轮转（防卡死在相邻两章间）
+      // 容量按【条目数】估算：全部内容 × 2 + 余量（守卫只防异常死循环）
+      var cap = 32;
+      for (var cv = 0; cv < chapters.length; cv++) cap += (mixByChap[chapters[cv]] || []).length;
+      for (var ck2 in motionsOf) cap += motionsOf[ck2].react.length + motionsOf[ck2].bridge.length;
+      cap = cap * 2 + 16;
+      var guard = cap * 4;
+      while (playlist.length < cap && guard-- > 0) {
+        var curIdle2 = homeIdleOf(cur);
+        var steps2 = mixByChap[cur] || [];
+        for (var st2 = 0; st2 < steps2.length; st2++) {
+          if (steps2[st2].consumed) continue; // loop 停留段已作为前一步的 hold
+          playlist.push({ anim: steps2[st2].n, idle: steps2[st2].hold || curIdle2, hold: !!steps2[st2].hold });
         }
-        return name;
-      }
-      for (var ci = 0; ci < chapters.length; ci++) {
-        var ch = chapters[ci];
-        var curIdle = chapterIdleOf(ch);
-        var poolKey = 'mix' + ch;
-        var steps = (profile.mixPools[poolKey] || []).map(function (n) {
-          var pm = /^mix\d+_(\d+)_(\d+)$/.exec(n);
-          return { n: n, idx: parseInt(pm[1], 10), sq: parseInt(pm[2], 10) };
-        }).sort(function (a, b) { return (a.idx - b.idx) || (a.sq - b.sq); });
-        for (var st = 0; st < steps.length; st++) {
-          playlist.push({ anim: steps[st].n, idle: curIdle });
+        visit[cur] = (visit[cur] || 0) + 1;
+        seenChap[cur] = 1;
+        var info = motionsOf[cur] || { react: [], bridge: [] };
+        var moved = false;
+        for (var ri = 0; ri < info.react.length; ri++) {
+          // 章内反应 motion：实测起止态都≈本章家（returnDist 小），回自家安全且保呼吸
+          playlist.push({ anim: info.react[ri].name, idle: curIdle2 });
         }
-        // 章末桥：该章的全部 motion 变体按序播放；播完进入下一章待机
-        var nextChap = chapters[(ci + 1) % chapters.length];
-        var nextIdle = chapterIdleOf(nextChap);
-        var bridge = (motionsByChap[ch] || []).sort(function (a, b) { return a.seq - b.seq; });
-        for (var bi = 0; bi < bridge.length; bi++) {
-          playlist.push({ anim: bridge[bi].name, idle: nextIdle });
+        var allSeen = Object.keys(seenChap).length >= chapters.length;
+        for (var bi2 = 0; bi2 < info.bridge.length && !moved; bi2++) {
+          var b = info.bridge[(visit[cur] - 1 + bi2) % info.bridge.length];
+          if (!allSeen && seenChap[b.to]) continue; // 还有未访问章节时不提前回环
+          // 过桥：终态=目标章家（实测），桥后回目标章家待机
+          playlist.push({ anim: b.name, idle: b.idle || homeIdleOf(b.to) });
+          cur = b.to;
+          moved = true;
+        }
+        if (!moved) {
+          // 无可走桥：优先推进到未访问章，否则全局轮转（保证每章的桥都会被走到）
+          var nxt = null;
+          for (var uu = 0; uu < chapters.length; uu++) {
+            if (!seenChap[chapters[uu]]) { nxt = chapters[uu]; break; }
+          }
+          if (nxt == null) nxt = chapters[(rot++) % chapters.length];
+          cur = nxt;
         }
       }
       profile._playlist = playlist;
+      // 链式续播标记（buildChainNext 实测）：链上段播完自动续播下一段；
+      // hold 停留段是官方编排的暂停点，不自动续。
+      for (var ci = 0; ci < playlist.length; ci++) {
+        var ce = playlist[ci];
+        ce.chain = (ce.hold || !profile.chainNext) ? null : (profile.chainNext[ce.anim] || null);
+      }
     }
     var pl = profile._playlist;
     if (!pl || !pl.length) return null;
@@ -273,11 +427,288 @@
       anim: item.anim,
       mode: 'full',
       idle: item.idle,
+      chain: item.chain || null,
     };
   }
 
   // 外部在皮肤切换/重建 profile 时调用：新皮肤序列从头开始
   function resetMix() { _mixStep = 0; }
+
+  // 链式续播：宿主在一段播完时调用，expected=该段实测的 chain 目标。
+  // 下一播放列表条目正是目标段（中间没被 hold/反应隔开）才续播并推进指针；
+  // 否则返回 null（宿主回待机等点击）。点击推进与自动续播共用同一指针，
+  // 链式演出中点击 = 跳进下一段（cleanSwitch 无缝），不会错位。
+  function advanceAuto(profile, expected) {
+    if (!profile || !profile._playlist || !profile._playlist.length) return null;
+    if (!expected) return null;
+    if (!Number.isFinite(_mixStep)) _mixStep = 0;
+    var item = profile._playlist[_mixStep % profile._playlist.length];
+    if (!item || item.anim !== expected) return null;
+    _mixStep++;
+    return { anim: item.anim, idle: item.idle, chain: item.chain || null };
+  }
+
+  // ===== 附件状态指纹实测（章节配对 + motion 终态） =========================
+  // 章节与待机的配对、motion 的终态都【无法从动画名推断】：
+  //   - 多数皮肤 mix{K} 配 idle{K}，但 dating20 实测 mix7 的家是 idle6、mix5 的家
+  //     是 idle4（故事链整体错一章）——按数字回待机 = 每段播完闪现真正别章的样子；
+  //   - motion{K}_* 是从本章出发的过渡桥（dating11：1_9→idle2、2_1→idle3、
+  //     3_0/4_0→回基地），终态各不相同。
+  // 唯一可靠判据是附件状态指纹。判定算法（对正确配对的皮肤零影响）：
+  //   家 idle = 让本章开场链（前 3 段连续播放）【入场跳变】最小的 idle
+  //   （从 live idleI 接播首段，采样 0.05s 时的附件差；正确配对时接近 0，
+  //    错配时是百级大跳变）。
+  // motion 终态 = 从源章的【实测家 idle】接播，结束态与各 idle 实时状态比附件差。
+  // 引擎保持零依赖：骨架/状态对象由宿主通过 createState() 注入，结果写回
+  // profile.homeIdle（{章节号: idle 名}）与 profile.motionTargets（{motion 名: idle 名}）。
+  //
+  // 阶段骨架（2026-10 实测 illust_dating22 起，多章约会皮每章独立骨架）：
+  //   宿主注入 profile.animPhase（{动画名: 阶段键}）与 profile.phases（有序阶段键），
+  //   createState(animName) 按动画所属阶段返回对应骨架的状态。探测全部按阶段隔离：
+  //   家 idle 只在动画同阶段的 idle 里选；motion 终态只与同阶段 idle 比对，
+  //   最小差 > CROSS_PHASE_DIST(30) 视为【跨阶段桥】——目标 = 下一阶段的实测家
+  //   idle（如 dating22 的 motion1_21 终态与 idle1 差 97，实为第一章终章演出，
+  //   接第二章 idle2），由宿主在阶段切换时换渲染骨架。无 animPhase 时行为与
+  //   单骨架皮肤完全一致。
+  var CROSS_PHASE_DIST = 30;
+
+  function computeMotionTargets(profile, createState) {
+    if (!profile.motionTargets) profile.motionTargets = {};
+    if (!profile.homeIdle) profile.homeIdle = {};
+    var idleNum = function (name) { var m = /^idle(\d+)$/.exec(name); return m ? parseInt(m[1], 10) : 0; };
+    var animPhase = profile.animPhase || null;
+    var phaseOrder = profile.phases || null;
+    function phaseOf(anim) {
+      return (animPhase && animPhase[anim]) || '1';
+    }
+    function nextPhaseIdle(phase) {
+      // 跨阶段桥的目标 = 下一阶段（按宿主给的顺序，末阶段回卷首）的实测家 idle
+      if (!phaseOrder || !phaseOrder.length) return null;
+      var idx = phaseOrder.indexOf(phase);
+      if (idx < 0) return null;
+      var nxt = phaseOrder[(idx + 1) % phaseOrder.length];
+      for (var key in profile.homeIdle) {
+        if (phaseOf(profile.homeIdle[key]) === nxt) return profile.homeIdle[key];
+      }
+      return null;
+    }
+    function snapshot(skeleton) {
+      var m = {};
+      for (var i = 0; i < skeleton.slots.length; i++) {
+        var s = skeleton.slots[i];
+        m[s.data.name] = s.attachment ? s.attachment.name : null;
+      }
+      return m;
+    }
+    function diff(a, b) {
+      var d = 0;
+      for (var k in a) if (a[k] !== b[k]) d++;
+      return d;
+    }
+    function liveIdle(createState, idle, frames) {
+      var ctx = createState(idle);
+      if (!ctx || !ctx.state || !ctx.skeleton) return null;
+      ctx.skeleton.setToSetupPose();
+      try { ctx.state.setAnimation(0, idle, true); } catch (e) { return null; }
+      for (var i = 0; i < frames; i++) { ctx.state.update(1 / 60); ctx.state.apply(ctx.skeleton); }
+      return ctx;
+    }
+    if (!profile.idles.length) return profile.motionTargets;
+    var WARM = 120; // 预热帧数：idle 的附件键基本都在循环前段，1.2s 足够稳定
+    // 1) 章节配对实测：每个 mix 池用开场首段找入场跳变最小的家
+    //   （首段 t=0.05 的附件差；正确配对时接近 0，错配是几十到几百的大跳变）
+    var openFrag = {};
+    Object.keys(profile.mixPools).forEach(function (g) {
+      var num = parseInt(g.replace('mix', ''), 10);
+      var frags = (profile.mixPools[g] || []).map(function (n) {
+        var pm = parseMixName(n);
+        return pm ? { n: n, step: pm.step, variant: pm.variant, mod: pm.mod, modN: pm.modN } : null;
+      }).filter(Boolean).sort(function (a, b) {
+        return (a.step - b.step) || ((a.variant > 0 ? 0 : 1) - (b.variant > 0 ? 0 : 1))
+          || ((a.variant > 0 ? a.variant : a.modN) - (b.variant > 0 ? b.variant : b.modN)) || (a.mod - b.mod);
+      }).slice(0, 1);
+      if (frags.length) openFrag[num] = frags;
+    });
+    Object.keys(openFrag).forEach(function (k) {
+      var num = parseInt(k, 10);
+      var anim = openFrag[k][0].n;
+      var ph = phaseOf(anim);
+      var best = null, bestJump = Infinity;
+      for (var q = 0; q < profile.idles.length; q++) {
+        var idle = profile.idles[q];
+        if (phaseOf(idle) !== ph) continue; // 阶段隔离：家 idle 只在骨架同阶段里找
+        var ctx = liveIdle(createState, idle, WARM);
+        if (!ctx) continue;
+        var before = snapshot(ctx.skeleton);
+        var jump;
+        try {
+          var e = ctx.state.setAnimation(0, anim, false);
+          e.mixDuration = 0;
+          ctx.state.update(0.05);
+          ctx.state.apply(ctx.skeleton);
+          jump = diff(snapshot(ctx.skeleton), before);
+        } catch (err) { continue; } // 该 idle 所在骨架没有此片段：跳过该候选
+        if (jump < bestJump) { bestJump = jump; best = idle; }
+      }
+      if (best) profile.homeIdle[num] = best;
+    });
+    // 2) motion 终态实测：从源章的【实测家 idle】接播，结束态归最近的 idle
+    //   （阶段骨架：只与同阶段 idle 比对；最小差过大 = 跨阶段桥，目标取下一阶段家）
+    var idleSnaps = {};
+    for (var q3 = 0; q3 < profile.idles.length; q3++) {
+      var ctxI = liveIdle(createState, profile.idles[q3], WARM);
+      if (ctxI) idleSnaps[profile.idles[q3]] = snapshot(ctxI.skeleton);
+    }
+    for (var mi = 0; mi < profile.motions.length; mi++) {
+      var m = profile.motions[mi];
+      var mm = /^motion(\d+)/.exec(m);
+      var home = (profile.homeIdle && profile.homeIdle[parseInt(mm[1], 10)]) || null;
+      if (!home) {
+        for (var q2 = 0; q2 < profile.idles.length; q2++) {
+          if (idleNum(profile.idles[q2]) === parseInt(mm[1], 10)) { home = profile.idles[q2]; break; }
+        }
+      }
+      if (!home) home = profile.idles[0];
+      var ctx = liveIdle(createState, home, WARM);
+      if (!ctx) continue;
+      var dur = 2;
+      var cur = ctx.state.getCurrent(0);
+      if (cur && cur.animation) dur = cur.animation.duration;
+      var end;
+      try {
+        var e2 = ctx.state.setAnimation(0, m, false);
+        e2.mixDuration = 0;
+        ctx.state.update(dur + 0.05);
+        ctx.state.apply(ctx.skeleton);
+        end = snapshot(ctx.skeleton);
+      } catch (err) { continue; } // 该骨架没有此 motion：跳过
+      var best2 = null, bestD = Infinity;
+      for (var idle2 in idleSnaps) {
+        if (phaseOf(idle2) !== phaseOf(m)) continue; // 阶段隔离：终态只在同阶段里归
+        var d = diff(end, idleSnaps[idle2]);
+        if (d < bestD || (d === bestD && best2 && idleNum(idle2) < idleNum(best2))) { bestD = d; best2 = idle2; }
+      }
+      if (best2 && bestD > CROSS_PHASE_DIST && phaseOrder && phaseOrder.length > 1) {
+        // 跨阶段桥（如 dating22 motion1_21 终态差 97）：目标 = 下一阶段的实测家 idle
+        var bridgeIdle = nextPhaseIdle(phaseOf(m));
+        if (bridgeIdle) {
+          profile.motionTargets[m] = bridgeIdle;
+          profile.motionReturnDist = profile.motionReturnDist || {};
+          profile.motionReturnDist[m] = 999;
+          continue;
+        }
+      }
+      profile.motionTargets[m] = best2;
+      // 结束态到【源章家 idle】的距离：锁章模式下决定该 motion 能否当章内反应
+      // （距离大 = 播完拽回家会闪，宁可不进播放列表）
+      profile.motionReturnDist = profile.motionReturnDist || {};
+      profile.motionReturnDist[m] = home && idleSnaps[home] ? diff(end, idleSnaps[home]) : 0;
+    }
+    buildChainNext(profile, createState, snapshot, diff, idleSnaps);
+    return profile.motionTargets;
+  }
+
+  // ===== 段落链式检测（2026-10 dating12「Stranger Bunny」实测）===============
+  // 两代章节模型并存： dating14/21/d22 等段落【锚定家 idle】（起点距家 ≈0，
+  // 每步播完回家不闪）；dating12 章1、dating11 章1、dating20 章5/7 的段落是
+  // 【连续演出】（相邻段终点→起点差 0~8，但段落起点距家 idle 达 100~300）——
+  // 对它们按"每步回 idle"播放，每步边界会闪现别的姿态（用户报的
+  // "动画不连贯跳出其他位置的动画"）。
+  // 判据（对锚定皮肤零影响）：相邻段 end→start 差 ≤ CHAIN_DIST 且【后段不锚定
+  // 家 idle】（起点距家 > CHAIN_DIST，插 idle 必闪）→ chainNext[A]=B，宿主播完
+  // A 自动续播 B；否则保持点击步进回 idle。章节的跨章桥 motion 在链式章节里
+  // 顺接末段（如 dating12 的 motion1_35 终点=idle2 差 0）。hold/loop 停留段是
+  // 官方编排的暂停点，不参与链（宿主回 hold 循环等点击）。
+  var CHAIN_DIST = 30;
+
+  function buildChainNext(profile, createState, snapshot, diff, idleSnaps) {
+    profile.chainNext = {};
+    var idleNum = function (name) { var m = /^idle(\d+)$/.exec(name); return m ? parseInt(m[1], 10) : 0; };
+    function st(name, t) {
+      var ctx = createState(name);
+      if (!ctx || !ctx.state || !ctx.skeleton) return null;
+      try {
+        ctx.skeleton.setToSetupPose();
+        var e = ctx.state.setAnimation(0, name, false);
+        e.mixDuration = 0;
+        ctx.state.update(t);
+        ctx.state.apply(ctx.skeleton);
+      } catch (err) { return null; }
+      return snapshot(ctx.skeleton);
+    }
+    function endState(name) {
+      var ctx = createState(name);
+      if (!ctx || !ctx.state || !ctx.skeleton) return null;
+      try {
+        ctx.skeleton.setToSetupPose();
+        var e = ctx.state.setAnimation(0, name, false);
+        e.mixDuration = 0;
+        var dur = 2;
+        try { dur = ctx.state.getCurrent(0).animation.duration; } catch (err2) { return null; }
+        ctx.state.update(dur + 0.05);
+        ctx.state.apply(ctx.skeleton);
+      } catch (err) { return null; }
+      return snapshot(ctx.skeleton);
+    }
+    function parse(n) {
+      var m = /^mix(\d+)_(\d+)(?:_(\d+))?(?:_(long|loop|end)(\d*))?$/.exec(n);
+      return m ? { chap: parseInt(m[1], 10), step: parseInt(m[2], 10), variant: m[3] ? parseInt(m[3], 10) : 0,
+        mod: m[4] ? ({ long: 1, loop: 2, end: 3 })[m[4]] : 0, modN: m[5] ? parseInt(m[5], 10) : 0 } : null;
+    }
+    var byChap = {};
+    var chapKeys = Object.keys(profile.mixPools).map(function (g) {
+      var n = parseInt(String(g).replace('mix', ''), 10);
+      return Number.isFinite(n) ? n : null;
+    }).filter(function (n) { return n != null; });
+    for (var i = 0; i < chapKeys.length; i++) {
+      var chap = chapKeys[i];
+      var list = (profile.mixPools['mix' + chap] || []).map(function (n) {
+        var p = parse(n);
+        if (!p) return null;
+        // loop 停留段是 hold，不参与链（与播放列表构建的 hold 配对一致）
+        return p.mod === 2 ? null : { n: n, step: p.step, variant: p.variant, mod: p.mod, modN: p.modN };
+      }).filter(Boolean);
+      list.sort(function (a, b) {
+        return (a.step - b.step) || ((a.variant > 0 ? 0 : 1) - (b.variant > 0 ? 0 : 1))
+          || ((a.variant > 0 ? a.variant : a.modN) - (b.variant > 0 ? b.variant : b.modN)) || (a.mod - b.mod);
+      });
+      byChap[chap] = list;
+    }
+    for (var c2 = 0; c2 < chapKeys.length; c2++) {
+      var chap2 = chapKeys[c2];
+      var home = profile.homeIdle[chap2];
+      if (!home || !idleSnaps[home]) continue;
+      var homeSnap = idleSnaps[home];
+      var list2 = byChap[chap2];
+      for (var s = 0; s < list2.length - 1; s++) {
+        var A = list2[s].n, B = list2[s + 1].n;
+        var endA = endState(A), startB = st(B, 0.02);
+        if (!endA || !startB) continue;
+        if (diff(endA, startB) <= CHAIN_DIST && diff(startB, homeSnap) > CHAIN_DIST) {
+          profile.chainNext[A] = B;
+        }
+      }
+      // 链式章节的跨章桥 motion 顺接末段（末段非锚定时；锚定章节保持点击步进）
+      var last = list2[list2.length - 1];
+      if (!last) continue;
+      var lastStart = st(last.n, 0.02);
+      if (!lastStart || diff(lastStart, homeSnap) <= CHAIN_DIST) continue;
+      for (var mi = 0; mi < profile.motions.length; mi++) {
+        var m = profile.motions[mi];
+        var mm = /^motion(\d+)/.exec(m);
+        if (!mm || parseInt(mm[1], 10) !== chap2) continue;
+        var tgt = profile.motionTargets[m];
+        if (!tgt) continue;
+        var tgtChap = null;
+        for (var key in profile.homeIdle) {
+          if (profile.homeIdle[key] === tgt) { tgtChap = parseInt(key, 10); break; }
+        }
+        if (tgtChap != null && tgtChap !== chap2) {
+          profile.chainNext[last.n] = m; // 末段播完自动接跨章桥
+        }
+      }
+    }
+  }
 
   // ===== 整段动画平滑播放 ====================================================
   // 宿主通用的 BD2 track0 播放器（预览 SpinePreview.vue 与壁纸 wallpaper_spine.html
@@ -465,11 +896,14 @@
   }
 
   window.BD2Interact = {
+    VERSION: 'v8-20261025', // 便于确认页面加载的引擎版本（调试 HUD 会显示）
     detect: detect,
+    computeMotionTargets: computeMotionTargets,
     buildZones: buildZones,
     boxOf: boxOf,
     classify: classify,
     decide: decide,
+    advanceAuto: advanceAuto,
     resetMix: resetMix,
     playFull: playFull,
     cueForMood: cueForMood,

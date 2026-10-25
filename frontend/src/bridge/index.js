@@ -27,6 +27,15 @@ const API_ACTIONS = {
   exportImageData: { path: '/api/export-image-data', method: 'POST' },
   applyWallpaper: { path: '/api/apply', method: 'POST' },
   getPalette: { path: '/api/palette', method: 'POST' },
+  getBackgrounds: { path: '/api/backgrounds', method: 'GET' },
+  upscaleBackground: { path: '/api/backgrounds/upscale', method: 'POST' },
+  exportBgForOutpaint: { path: '/api/backgrounds/export-outpaint', method: 'POST' },
+  importOutpaintResults: { path: '/api/backgrounds/import-outpaint', method: 'POST' },
+  deleteCustomBg: { path: '/api/backgrounds/delete-custom', method: 'POST' },
+  openOutputDir: { path: '/api/open/output-dir', method: 'POST' },
+  openInputDir: { path: '/api/open/input-dir', method: 'POST' },
+  openCustomBgDir: { path: '/api/open/custom-dir', method: 'POST' },
+  openBackgroundDir: { path: '/api/open/background-dir', method: 'POST' },
   getConfig: { path: '/api/config', method: 'GET' },
   setConfig: { path: '/api/config', method: 'POST' },
   voiceStatus: { path: '/api/voice/status', method: 'GET' },
@@ -74,6 +83,27 @@ function bodyFor(name, args) {
   if (name === 'voiceClean') {
     const [all] = args
     return { all: !!all }
+  }
+  if (name === 'upscaleBackground') {
+    const [params] = args
+    return {
+      filename: (params && params.filename) || '',
+      scale: (params && params.scale) || 2,
+      algorithm: (params && params.algorithm) || 'waifu2x',
+      denoise: (params && params.denoise) !== undefined ? params.denoise : 0,
+      tta: Boolean(params && params.tta),
+      downsample: Boolean(params && params.downsample),
+    }
+  }
+  // 扩图工作流：导出当前背景到 output 目录（filename + 当前皮肤 asset.dir，
+  // 同角色姊妹皮肤可能同名不同图，必须带皮肤上下文解析）/ 删除自定义背景只需文件名
+  if (name === 'exportBgForOutpaint') {
+    const [filename, dir] = args
+    return { filename: filename || '', dir: dir || '' }
+  }
+  if (name === 'deleteCustomBg') {
+    const [filename] = args
+    return { filename: filename || '' }
   }
   // 批量删除：args[0] = [{ship,bundle,name}, ...]
   if (name === 'deleteSkinsBatch') {
@@ -154,6 +184,15 @@ export const bridge = {
   exportImage: (ship, bundle, name) => call('exportImage', ship, bundle, name),
   applyWallpaper: (ship, bundle, name, options) => call('applyWallpaper', ship, bundle, name, options),
   getPalette: (ship, bundle, name, opts) => call('getPalette', ship, bundle, name, opts),
+  getBackgrounds: (params) => call('getBackgrounds', params),
+  upscaleBackground: (params) => call('upscaleBackground', params),
+  exportBgForOutpaint: (filename, dir) => call('exportBgForOutpaint', filename, dir),
+  importOutpaintResults: () => call('importOutpaintResults'),
+  deleteCustomBg: (filename) => call('deleteCustomBg', filename),
+  openOutputDir: () => call('openOutputDir'),
+  openInputDir: () => call('openInputDir'),
+  openCustomBgDir: () => call('openCustomBgDir'),
+  openBackgroundDir: () => call('openBackgroundDir'),
   downloadSkin: (ship, bundle, name, downloadId) => call('downloadSkin', ship, bundle, name, downloadId),
   cancelDownload: (id) => call('cancelDownload', id),
   exportImageData: (ship, bundle, name, dataUrl, index) => call('exportImageData', ship, bundle, name, dataUrl, index),

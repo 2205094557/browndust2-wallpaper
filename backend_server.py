@@ -14,21 +14,37 @@ import shutil
 import subprocess
 import sys
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+from core.backgrounds import (  # noqa: E402
+    CATEGORIES,
+    background_dirs,
+    delete_custom_background,
+    export_background_for_outpaint,
+    get_available_backgrounds,
+    get_recommendations_for_ship,
+    import_outpaint_results,
+    migrate_legacy_custom,
+)
 from core.config import Config  # noqa: E402
 from core.library import Library  # noqa: E402
 from core.locks import named_lock  # noqa: E402
 from core.metadata import Metadata  # noqa: E402
 from core.palette import extract_palette, fallback_palette, find_palette_source, mode_css  # noqa: E402
 from core.registry import Registry  # noqa: E402
+from core.upscaler import ALGORITHMS as UPSCALE_ALGORITHMS, clean_preview_dir, upscale_background_image  # noqa: E402
 from core.voice import set_resolver as _voice_set_resolver  # noqa: E402
 from core.we_integration import apply_wallpaper  # noqa: E402
 from core.applog import setup_logging  # noqa: E402
+
+clean_preview_dir()
+# 旧版持久成品库 custom 已废弃：启动时把其中的文件并入 input（幂等，不丢文件）
+migrate_legacy_custom(ROOT)
 
 registry = Registry(ROOT / "plugins").discover()
 metadata = Metadata(ROOT / "resources" / "metadata")
@@ -116,18 +132,20 @@ refresh_library()
 
 
 def _resolve_voice_painting(painting: str):
-    """illust_datingN 等间接 painting → 所属服装的语音 id。
+    """illust_datingN[_K] 等间接 painting → 所属服装的语音 id。
 
     约会立绘本身没有独立语音包，互动语音按服装（charXXXXXX）挂载；通过元数据
     反查 dating 字段归属的服装 id。注意：这里只做映射、不检查 bytes 是否存在——
     resolve_id 的调用方（语音状态查询/导出）按返回值自行判断，而补语音流程
-    恰恰需要拿到"还没下载"的目标 id。
+    恰恰需要拿到"还没下载"的目标 id。2026-10 起官方把多章节约会皮拆成多套
+    骨架（illust_dating22_1/_2），分卷 painting 归属同一服装。
     """
-    m = re.fullmatch(r"illust_dating\d+", painting)
+    m = re.fullmatch(r"illust_dating\d+(?:_\d+)?", painting)
     if not m:
         return None
+    base = re.sub(r"_\d+$", "", painting)
     for e in metadata.characters():
-        if (e.get("dating") or "").lower() == painting:
+        if (e.get("dating") or "").lower() == base:
             return f"char{e['id']}"
     return None
 
@@ -157,7 +175,20 @@ def set_config(patch: dict) -> dict:
 def resolve_skin(ship: str, bundle: str, name: str | None = None) -> dict | None:
     hits = [s for s in metadata.skins() if s.get("ship") == ship and s.get("bundle") == bundle]
     if not hits:
-        return None
+        # 本地独有条目（多章约会皮分卷 illust_dating22_1 等）：skins.json 只有
+        # 基础条目，local_skins 是提取事实来源，直接以本地数据兜底解析。
+        locs = [
+            l for l in metadata.local_skins()
+            if l.get("ship") == ship and l.get("bundle") == bundle
+        ]
+        if not locs:
+            return None
+        if name is None:
+            return locs[0]
+        for s in locs:
+            if s.get("name") == name:
+                return s
+        return locs[0] if len(locs) == 1 else None
     if name is None:
         return hits[0]
     for s in hits:
@@ -211,6 +242,20 @@ def skin_files(skin: dict) -> list[Path]:
     return [p for p in paths if p.exists()]
 
 
+def _sync_skins_and_index() -> None:
+    """重建 skins.json（含约会分卷条目发现）→ local_skins.json 并刷新内存。
+
+    分卷条目由 build_bd2_skins 从提取目录发现，所以任何会增删提取产物的流程
+    （下载/删除/清空）都必须走这里，只跑 build_local_index 会让图鉴看不到新
+    分卷或留下幽灵条目。
+    """
+    with _INDEX_LOCK:
+        run_tool("build_bd2_skins", timeout=60)
+        run_tool("build_local_index", timeout=120)
+        metadata.reload()
+        refresh_library()
+
+
 def delete_skin_files(ship: str, bundle: str, name: str | None = None) -> dict:
     skin = resolve_skin(ship, bundle, name)
     if not skin:
@@ -221,9 +266,7 @@ def delete_skin_files(ship: str, bundle: str, name: str | None = None) -> dict:
             shutil.rmtree(p, ignore_errors=True)
         elif p.is_file():
             p.unlink(missing_ok=True)
-    run_tool("build_local_index", timeout=120)
-    metadata.reload()
-    refresh_library()
+    _sync_skins_and_index()
     # 语音联动：该船已无其他已下载皮肤时，删除其语音（转换产物 + cue 包）
     try:
         from core import voice as voice_mod
@@ -278,9 +321,7 @@ def delete_skins_batch(items: list[dict]) -> dict:
     try:
         from core import voice as voice_mod
 
-        run_tool("build_local_index", timeout=120)  # 先重建一次索引供下方查询
-        metadata.reload()
-        refresh_library()
+        _sync_skins_and_index()  # 先重建一次索引供下方查询
         remaining = {s.get("painting", "").lower() for s in downloaded_with_painting()}
         for painting in sorted(seen_paintings):
             if painting in remaining:
@@ -291,9 +332,7 @@ def delete_skins_batch(items: list[dict]) -> dict:
     except Exception as e:  # noqa: BLE001
         print(f"[batch-delete] 语音联动失败: {e}")
         # 兜底：仍要保证索引与内存一致
-        run_tool("build_local_index", timeout=120)
-        metadata.reload()
-        refresh_library()
+        _sync_skins_and_index()
     return {
         "ok": not failed,
         "removed_count": len(removed),
@@ -313,9 +352,7 @@ def clear_all_downloads() -> dict:
                 else:
                     child.unlink(missing_ok=True)
                 removed.append(str(child))
-    run_tool("build_local_index", timeout=120)
-    metadata.reload()
-    refresh_library()
+    _sync_skins_and_index()
     return {"ok": True, "removed": removed}
 
 
@@ -404,9 +441,7 @@ def run_tool(name: str, args: list[str] | None = None, timeout: int = 600) -> tu
 
 def finish_metadata_update() -> None:
     """同步完成后重建本地索引并刷新内存元数据/资源库。"""
-    run_tool("build_local_index", timeout=120)
-    metadata.reload()
-    refresh_library()
+    _sync_skins_and_index()
 
 
 def run_metadata_update() -> dict:
@@ -414,6 +449,7 @@ def run_metadata_update() -> dict:
 
     names 步骤联网拉取 browndust2-db.souseha.com 的简体角色名/皮肤名并下载头像；
     失败不阻断其余步骤（回退英文名），但会在结果里标为失败。
+    任一步工具抛异常也只标 fail、不冒泡（工具崩了不该让整个接口 500）。
     """
     report: dict = {"ok": True, "steps": {}}
     for step, tool, timeout in (
@@ -421,15 +457,26 @@ def run_metadata_update() -> dict:
         ("characters", "build_bd2_metadata", 300),
         ("skins", "build_bd2_skins", 60),
     ):
-        rc, out, err = run_tool(tool, timeout=timeout)
-        report["steps"][step] = {
-            "ok": rc == 0,
-            "output": out.decode("utf-8", "ignore")[-3000:],
-            "error": err.decode("utf-8", "ignore")[-800:],
-        }
-        if rc != 0:
+        try:
+            rc, out, err = run_tool(tool, timeout=timeout)
+            report["steps"][step] = {
+                "ok": rc == 0,
+                "output": out.decode("utf-8", "ignore")[-3000:],
+                "error": err.decode("utf-8", "ignore")[-800:],
+            }
+        except Exception as e:  # noqa: BLE001
+            report["steps"][step] = {
+                "ok": False,
+                "output": "",
+                "error": f"{type(e).__name__}: {e}"[:800],
+            }
+        if not report["steps"][step]["ok"]:
             report["ok"] = False
-    finish_metadata_update()
+    try:
+        finish_metadata_update()
+    except Exception as e:  # noqa: BLE001
+        report["ok"] = False
+        report["finalize_error"] = f"{type(e).__name__}: {e}"[:800]
     return report
 
 
@@ -457,6 +504,13 @@ ALIGN_MAP = {
 }
 
 
+def _preview_writer():
+    """延迟导入壁纸封面写入函数（core.wallpaper 依赖较轻，这里仅为可读性）。"""
+    from core.wallpaper import write_preview_from_data_url
+
+    return write_preview_from_data_url
+
+
 def _export_project(ship: str, bundle: str, name: str | None, options: dict) -> str:
     """生成 WE 壁纸项目，返回项目目录。"""
     skin = resolve_skin(ship, bundle, name)
@@ -468,12 +522,19 @@ def _export_project(ship: str, bundle: str, name: str | None, options: dict) -> 
     stype = skin.get("type", "")
     if stype not in ("spine", "static"):
         raise ValueError(f"皮肤类型 {stype} 不支持导出壁纸")
-    exporter = registry.get(
-        "exporters",
-        {"spine": "wallpaper_spine", "static": "wallpaper_static"}[stype],
-    )
+    exporter_id = {"spine": "wallpaper_spine", "static": "wallpaper_static"}[stype]
+    exporter = registry.get("exporters", exporter_id)
     if exporter is None:
         raise ValueError("导出插件未注册")
+    try:
+        import importlib
+        import inspect
+        mod = inspect.getmodule(exporter.__class__)
+        if mod:
+            importlib.reload(mod)
+            exporter = getattr(mod, exporter.__class__.__name__)()
+    except Exception:  # noqa: BLE001
+        pass
     opts = options or {}
     try:
         proj = exporter.export(
@@ -482,10 +543,19 @@ def _export_project(ship: str, bundle: str, name: str | None, options: dict) -> 
                 "root": str(ROOT),
                 "bg": opts.get("bg", "monet"),
                 "bgColor": opts.get("bgColor"),
+                "bgImage": opts.get("bgImage"),
+                "hideDefaultBg": bool(opts.get("hideDefaultBg", False)),
                 "scale": int(opts.get("scale", 100) or 100),
                 "bgScale": int(opts.get("bgScale", 100) or 100),
                 "offsetX": int(opts.get("offsetX", 0) or 0),
                 "offsetY": int(opts.get("offsetY", 0) or 0),
+                "charOffsetX": int(opts.get("charOffsetX", 0) or 0),
+                "charOffsetY": int(opts.get("charOffsetY", 0) or 0),
+                # 人物旋转（度，正=顺时针）：预览"人物旋转"滑块同值烘进模板
+                "rotation": int(opts.get("rotation", 0) or 0),
+                # 背景图独立位移（只移背景图，预览 drawBg 同语义）
+                "bgOffsetX": int(opts.get("bgOffsetX", 0) or 0),
+                "bgOffsetY": int(opts.get("bgOffsetY", 0) or 0),
                 "alignment": ALIGN_MAP.get(str(opts.get("alignment", "center")), 0),
                 "animation": opts.get("animation", ""),
                 "animations": opts.get("animations") or [],
@@ -495,11 +565,22 @@ def _export_project(ship: str, bundle: str, name: str | None, options: dict) -> 
                 "interact": bool(opts.get("interact", True)),
                 # Spine 专属：显示交互区域（预览页打开则 WE 默认也打开）
                 "showHitAreas": bool(opts.get("showHitAreas", False)),
+                # 多预设（每个预设 = 动画 + 背景 + 构图，WE 里下拉切换）：
+                # 原样透传列表，导出器负责清洗/拷图/烘 PRESETS_JSON
+                "presets": opts.get("presets") or [],
             },
             str(ROOT / "resources" / "wallpapers"),
         )
     except Exception as e:  # noqa: BLE001
         raise ValueError(f"导出失败: {e}") from e
+    # 封面：前端截取的预览帧（预览画布即 16:9 构图）优先写成 preview.jpg，
+    # 与用户看到的画面一致。失败则保留导出器生成的兜底预览。
+    preview_data = opts.get("previewImage")
+    if preview_data:
+        try:
+            _preview_writer()(Path(proj), str(preview_data))
+        except Exception as ex:  # noqa: BLE001
+            print(f"[preview] 写入预览封面失败: {ex}", flush=True)
     return proj
 
 
@@ -717,9 +798,13 @@ def download_skin(skin: dict, cancel_event: threading.Event | None = None) -> di
     else:
         # spine 四族：主立绘 / 约会 / 尊爵 / 演出
         if painting.startswith("illust_dating"):
+            # 2026-10 起多章节约会皮按骨架拆分（illust_dating22_1/_2）：CDN 定位
+            # 与提取关键词都用基础名（分卷共享同一 prefab 与共享大包），落盘后
+            # _split_dating_parts 再按骨架前缀拆到独立目录。
+            dating_base = re.sub(r"_(\d+)$", r"", painting)
             _emit_stage("正在定位约会立绘资源包", detail=painting)
-            targets = _resolve([re.compile(rf"^Char/Datingillust/{re.escape(painting)}\.prefab$", re.I)])
-            keywords = [painting]
+            targets = _resolve([re.compile(rf"^Char/Datingillust/{re.escape(dating_base)}\.prefab$", re.I)])
+            keywords = [dating_base]
         elif painting.startswith("cutscene_"):
             _emit_stage("正在定位 Ultimate 演出资源包", detail=painting)
             targets = _resolve([re.compile(rf"^SkeletonData/{re.escape(painting)}/", re.I)])
@@ -750,11 +835,13 @@ def download_skin(skin: dict, cancel_event: threading.Event | None = None) -> di
                     print(f"[download] {painting} 提取失败: {e}")
 
         # 互动语音：主立绘直接下载；约会立绘反查所属服装的语音包。
-        # （BD2 互动语音按服装挂载，约会皮肤交互也播所属服装的 Int_{Mood} 语音）
+        # （BD2 互动语音按服装挂载，约会皮肤交互也播所属服装的 Int_{Mood} 语音；
+        #   分卷 painting（illust_dating22_1）归属同一服装）
         voice_painting = painting
         if not re.fullmatch(r"char\d{6}", painting):
+            dating_key = re.sub(r"_(\d+)$", r"", painting)
             for e in metadata.characters():
-                if (e.get("dating") or "").lower() == painting:
+                if (e.get("dating") or "").lower() == dating_key:
                     voice_painting = f"char{e['id']}"
                     break
         if config.get("voice_download") and re.fullmatch(r"char\d{6}", voice_painting):
@@ -774,10 +861,7 @@ def download_skin(skin: dict, cancel_event: threading.Event | None = None) -> di
 
     # 重建本地索引并刷新资源库
     _emit_stage("正在同步本地索引")
-    with _INDEX_LOCK:
-        run_tool("build_local_index", timeout=120)
-        metadata.reload()
-        refresh_library()
+    _sync_skins_and_index()
     ok_items = [d for d in downloaded if d["ok"]]
     failed_items = [d for d in downloaded if not d["ok"]]
     if not downloaded:
@@ -1003,6 +1087,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"ok": True, "skins": downloaded_with_painting()})
             elif self.path.startswith("/api/voice/status"):
                 self._send(200, voice_status(self._query("painting", "")))
+            elif self.path.startswith("/api/backgrounds"):
+                ship = urllib.parse.unquote(self._query("ship", ""))
+                dirs = background_dirs(ROOT)
+                bgs = get_available_backgrounds(dirs.official, dirs.input)
+                fn_set = {b["filename"] for b in bgs}
+                recs = get_recommendations_for_ship(ship, fn_set) if ship else []
+                self._send(200, {
+                    "ok": True,
+                    "backgrounds": bgs,
+                    "categories": CATEGORIES,
+                    "recommendations": recs,
+                    "upscaleAlgorithms": UPSCALE_ALGORITHMS,
+                    "customCount": sum(1 for b in bgs if b.get("source") == "custom"),
+                    # 扩图工作流目录：output = 导出待扩图，input = 放扩图成品（导入只扫 input）
+                    "outputDir": str(dirs.output),
+                    "inputDir": str(dirs.input),
+                })
             elif self.path.startswith("/api/config"):
                 self._send(200, get_config())
             else:
@@ -1134,6 +1235,64 @@ class Handler(BaseHTTPRequestHandler):
                             "css": css,
                         },
                     )
+            elif self.path.startswith("/api/backgrounds/export-outpaint"):
+                # 扩图工作流第一步：把当前所选背景（含超分版本）复制到扩图中转目录。
+                # dir=当前皮肤 asset.dir：同角色姊妹皮肤可能同名不同图，必须按皮肤目录优先解析
+                try:
+                    self._send(
+                        200,
+                        export_background_for_outpaint(
+                            ROOT, data.get("filename") or "", data.get("dir") or ""),
+                    )
+                except Exception as ex:  # noqa: BLE001
+                    logger.exception("导出扩图背景失败: %s", data.get("filename"))
+                    self._send(200, {"ok": False, "error": str(ex)})
+            elif self.path.startswith("/api/backgrounds/import-outpaint"):
+                # 扩图工作流第三步：把中转目录里的扩图成果导入自定义背景库
+                self._send(200, import_outpaint_results(ROOT))
+            elif self.path.startswith("/api/backgrounds/delete-custom"):
+                self._send(200, delete_custom_background(ROOT, data.get("filename") or ""))
+            elif self.path.startswith("/api/backgrounds/upscale"):
+                filename = data.get("filename") or ""
+                scale = int(data.get("scale") or 2)
+                algo = data.get("algorithm") or "waifu2x"
+                denoise = int(data.get("denoise") or 0)
+                tta = bool(data.get("tta", False))
+                downsample = bool(data.get("downsample", False))
+                try:
+                    res = upscale_background_image(
+                        filename,
+                        scale=scale,
+                        algorithm=algo,
+                        denoise=denoise,
+                        tta=tta,
+                        downsample=downsample,
+                    )
+                    self._send(200, res)
+                except Exception as ex:  # noqa: BLE001
+                    logger.exception("超分背景图片失败: %s", filename)
+                    self._send(200, {"ok": False, "error": str(ex)})
+            elif self.path.startswith("/api/open/output-dir"):
+                dirs = background_dirs(ROOT)
+                dirs.output.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(dirs.output))  # noqa: S606
+                self._send(200, {"ok": True})
+            elif self.path.startswith("/api/open/input-dir"):
+                dirs = background_dirs(ROOT)
+                dirs.input.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(dirs.input))  # noqa: S606
+                self._send(200, {"ok": True})
+            elif self.path.startswith("/api/open/custom-dir"):
+                # 兼容旧前端：成品库已并入 input，这里打开同一个目录
+                dirs = background_dirs(ROOT)
+                dirs.input.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(dirs.input))  # noqa: S606
+                self._send(200, {"ok": True})
+            elif self.path.startswith("/api/open/background-dir"):
+                dirs = background_dirs(ROOT)
+                dirs.official.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(dirs.official))  # noqa: S606
+                self._send(200, {"ok": True})
             elif self.path.startswith("/api/open/download-dir"):
                 os.startfile(str(ROOT / "resources" / "bundles"))  # noqa: S606
                 self._send(200, {"ok": True})

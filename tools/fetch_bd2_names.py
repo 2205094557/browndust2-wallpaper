@@ -99,7 +99,10 @@ def resolve_db_chunk_url() -> tuple[str, bytes]:
 
 _RE_COSTUME = re.compile(
     r'\{costumeId:"([A-Za-z0-9_]+)",character:"([^"]*)",costumeName:"([^"]*)",characterId:"([A-Za-z0-9_]+)"')
-_RE_GAMEID = re.compile(r'gameId:"(\d{6})",avatarId:"(\d{6})"')
+# 老角色：gameId/avatarId 成对 6 位；新角色（2026-09 起）编号不补零且常无 avatarId
+# （如 Aquila：gameId:"67901"→资产 067901）。4-6 位统一补零到 6 位对齐资产侧。
+_RE_GAMEID = re.compile(r'gameId:"(\d{4,6})",avatarId:"(\d{4,6})"')
+_RE_GAMEID_ONLY = re.compile(r'gameId:"(\d{4,6})"')
 _RE_CHAR_I18N = re.compile(
     r'\{characterId:"([A-Za-z0-9_]+)",character:"([^"]*)",character_CN:"([^"]*)",character_en:"([^"]*)"')
 _RE_SKIN_I18N = re.compile(
@@ -112,16 +115,30 @@ def parse_db_chunk(text: str) -> dict:
     chars: dict[str, dict] = {}      # characterId -> i18n 名
     skin_i18n: dict[str, dict] = {}  # costumeId -> i18n 名
     for m in _RE_COSTUME.finditer(text):
-        window_end = min(m.end() + 9000, len(text))
-        gm = _RE_GAMEID.search(text, m.end(), window_end)
-        if not gm:
-            continue
-        costumes[gm.group(1)] = {
+        # 窗口截止到下一个 costumeId：避免跨进别的 costume 块抓到别人的编号
+        # （Aquila_1 这类新角色自身无成对 gameId/avatarId，只有 gameId:"67901"）
+        nxt = _RE_COSTUME.search(text, m.end())
+        seg_end = nxt.start() if nxt else min(m.end() + 9000, len(text))
+        seg = text[m.end():seg_end]
+        gm = _RE_GAMEID.search(seg)
+        avatar_id = ""
+        if gm:
+            game_id = gm.group(1)
+            avatar_id = gm.group(2)
+        else:
+            gm2 = _RE_GAMEID_ONLY.search(seg)
+            if not gm2:
+                continue  # 本对象内无编号，不猜远窗（避免错挂到别人 id 上）
+            game_id = gm2.group(1)
+        gid = game_id.zfill(6)  # 短编号补零：67901→067901（与 char067901 资产对齐）
+        if gid in costumes:
+            continue  # 相邻窗口误匹配保护：同 id 以先到者为准
+        costumes[gid] = {
             "costume_id": m.group(1),
             "character_id": m.group(4),
             "name_tc": m.group(3),
             "char_tc": m.group(2),
-            "avatar_id": gm.group(2),
+            "avatar_id": avatar_id.zfill(6) if avatar_id else "",
         }
     for m in _RE_CHAR_I18N.finditer(text):
         chars[m.group(1)] = {"tc": m.group(2), "cn": m.group(3), "en": m.group(4)}
@@ -178,6 +195,9 @@ def download_avatars(data: dict, force: bool = False) -> dict:
         if not cn or not fname_base or fname_base in seen_cn:
             continue
         seen_cn.add(fname_base)
+        if not rec.get("avatar_id"):
+            skip += 1  # 新角色常无 avatarId（BD2DB 尚未放图），跳过不下载
+            continue
         url = f"{IMAGE_HOST}/avatar/icon_char{rec['avatar_id']}.webp"
         dest = AVATAR_DIR / f"{fname_base}.jpg"
         prev = fp.get(cid) or {}

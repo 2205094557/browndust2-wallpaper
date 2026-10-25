@@ -10,6 +10,7 @@ from core.registry import ExporterPlugin
 from core.wallpaper import (
     bg_css_for_skin,
     export_defaults,
+    generate_preview_image,
     project_dir_name,
     project_json,
     render_template,
@@ -53,4 +54,5 @@ class WallpaperStaticExporter(ExporterPlugin):
             ),
             encoding="utf-8",
         )
+        generate_preview_image(proj, src_dir / image)
         return str(proj)

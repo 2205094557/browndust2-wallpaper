@@ -9,6 +9,11 @@ spine/static 两种渲染器：
 - 静态    → static, painting=illust_charXXXXXX_NNN（图鉴大图）
 
 前端图鉴按 ship(人物) 分组展示这些条目，与碧蓝的交互完全一致。
+
+多章约会皮（2026-10 实测 illust_dating22=阿奇拉·被封印的欲望起）仍是一个
+条目：官方把每个章节场景做成独立骨架（illust_dating22_1/_2），提取后同落
+基础目录，由 build_local_index 收进 asset.skel_sets，互动引擎按既定章节
+行走规则跨骨架推进（见 AGENTS.md 铁律 7）——不分卷、不拆条目。
 """
 import json
 import re

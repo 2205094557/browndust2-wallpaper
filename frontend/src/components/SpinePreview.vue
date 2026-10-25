@@ -40,6 +40,22 @@ const props = defineProps({
   bgScale: { type: Number, default: 100 },
   offsetX: { type: Number, default: 0 },
   offsetY: { type: Number, default: 0 },
+  // 角色独立位置偏移（与整体偏移 offsetX/offsetY 区分）：只移动角色骨架，
+  // 背景（背景图/背景层/CSS 背景）保持不动。单位同整体偏移：画布宽/高百分比 ±100。
+  charOffsetX: { type: Number, default: 0 },
+  charOffsetY: { type: Number, default: 0 },
+  // 背景图独立位移（%）：只移动背景图，角色不动。与 bgScale 配套（背景缩放/位置独立调节）。
+  bgOffsetX: { type: Number, default: 0 },
+  bgOffsetY: { type: Number, default: 0 },
+  // 人物旋转（度，正=屏幕顺时针）：只旋转人物层，背景/背景层不动；绕人物自身
+  // 中心（含人物偏移后的位置）旋转。渲染端把旋转并入投影矩阵（clearRenderFrame
+  // 两段式），取景框按旋转后 AABB 外扩保证任意角度完整可见。导出模板同步
+  // （CHAR_ROTATION，见 wallpaper_spine.html / export_defaults）。
+  rotation: { type: Number, default: 0 },
+  // 版式拖拽调节目标：'stage'=整体平移（默认，拖动平移画面）；'char'=只调节人物；
+  // 'bg'=只调节背景。选中人物/背景时，拖动移动所选目标、滚轮缩放所选目标，
+  // 且点击不再触发皮肤互动（只调节当前选择）。
+  adjustTarget: { type: String, default: 'stage' },
   alignment: { type: String, default: 'center' },
   // 互动模式：false=拖拽（平移画面）；true=互动（拖拽触发 drag 动画）
   interactionMode: { type: Boolean, default: false },
@@ -48,8 +64,10 @@ const props = defineProps({
   showHitAreas: { type: Boolean, default: false },
   // 开场动画：开启时互动皮肤先播 login 入场一次再回待机；关闭直接待机
   intro: { type: Boolean, default: true },
+  // 隐藏骨架内置默认背景（当外部已选用自定义扩图/场景背景/纯色等样式时，避免重叠出现两个背景）
+  hideDefaultBg: { type: Boolean, default: false },
 })
-const emit = defineEmits(['ready', 'error', 'animations', 'scaleChange', 'panChange', 'subtitle'])
+const emit = defineEmits(['ready', 'error', 'animations', 'scaleChange', 'panChange', 'subtitle', 'bgScaleChange', 'charOffsetChange', 'bgOffsetChange'])
 
 const wrapRef = ref(null)
 const hitAreas = ref([]) // [{label, style, kind}] 部位提示框（head/body/drag）
@@ -67,6 +85,38 @@ let lastFrame = 0
 let disposed = false
 let paused = false // keep-alive 切走（onDeactivated）时暂停渲染循环
 let boundsCache = null
+// 人物层并集包围盒中心（旋转支点的基础值，随 boundsCache 同生命周期失效）。
+// 旋转是渲染期投影变换、不改骨骼世界坐标，所以旋转角度变化无需重建此缓存。
+let charCenterCache = null
+
+function computeCharCenter() {
+  const per = layers
+    .filter((l) => l.skeleton && !isBgLayer(l) && isActiveSkel(l))
+    .map(layerBounds)
+    .filter((b) => Number.isFinite(b.minX))
+  if (!per.length) return null
+  return {
+    x: (Math.min(...per.map((b) => b.minX)) + Math.max(...per.map((b) => b.maxX))) / 2,
+    y: (Math.min(...per.map((b) => b.minY)) + Math.max(...per.map((b) => b.maxY))) / 2,
+  }
+}
+
+// 旋转支点 = 人物基础中心 + 人物独立偏移（%取景框 × zoom 的世界位移）——
+// 偏移后再"原地"旋转，而不是绕取景中心打转
+function charPivot() {
+  const base = charCenterCache
+  if (base) {
+    const cv = canvasRef.value
+    const _off = WL.charOffsetWorld(
+      props.charOffsetX, props.charOffsetY,
+      (cv && cv.clientWidth) || 0, (cv && cv.clientHeight) || 0,
+      (renderer && renderer.camera.zoom) || 1,
+    )
+    return { x: base.x + _off.x, y: base.y + _off.y }
+  }
+  const b = boundsCache || { minX: -1, maxX: 1, minY: -1, maxY: 1 }
+  return { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 }
+}
 let drag = null
 // 远程交互区域数据（nagami 数据集 models/{asset}.json 的 hitAreas，游戏 prefab 提取）
 let remoteHitAreas = []
@@ -79,10 +129,134 @@ let interactTimer = 0
 let voiceShipId = null
 let voicePick = null // { touch_head/touch_body/touch_special/login/home: cue }
 let voiceWords = {}
+// ---- Ultimate 演出多阶段背景（asset.bg_sets）：按当前动画切背景组 ----
+let bgSetImgs = null       // [{set, img}] 升序；null = 无多背景（走旧路径）
+let bgSetReady = false
+function curAnimName() {
+  const l0 = layers.find((l) => l.skeleton && l.state)
+  if (!l0) return ''
+  const e = l0.state.getCurrent(0)
+  return e && e.animation ? e.animation.name : ''
+}
+async function initBgSets() {
+  const asset = props.skin && props.skin.asset
+  const sets = (asset && asset.bg_sets) || {}
+  const keys = Object.keys(sets)
+  if (!keys.length) { bgSetReady = true; return }
+  const base = assetUrl(asset.dir)
+  try {
+    const arr = await Promise.all(keys.map(async (k) => {
+      const img = await new Promise((resolve, reject) => {
+        const im = new Image()
+        im.onload = () => resolve(im)
+        im.onerror = () => reject(new Error(`bgset load fail ${sets[k]}`))
+        im.src = `${base}/${sets[k]}`
+      })
+      return { set: parseInt(k, 10) || 0, img }
+    }))
+    if (disposed) return
+    bgSetImgs = arr.sort((a, b) => a.set - b.set)
+  } catch (e) {
+    console.warn('[spine-render] bg_sets 加载失败:', e.message || e)
+  }
+  bgSetReady = true
+}
+function activeBgSetImg() {
+  if (!bgSetReady || !bgSetImgs || !bgSetImgs.length) return null
+  const maxSet = bgSetImgs[bgSetImgs.length - 1].set
+  const want = WL.bgSetForAnim(curAnimName(), maxSet)
+  return bgSetImgs.find((b) => b.set === want)?.img || bgSetImgs[0].img
+}
 // ---- BD2 拟官方互动（单源引擎 window.BD2Interact，与壁纸模板同一份文件） ----
 let bd2Profile = null      // detect(动画名) 结果缓存（随皮肤加载重建）
 let bd2FullPlaying = false // mix/motion 整段演出播放中（complete 回待机）
 let bd2IdleAfter = ''      // 演出结束回退的待机动画名
+let bd2ChainNext = null    // 链式续播目标（演出实测 chainNext；null=播完回待机）
+// 多章约会皮阶段骨架（asset.skel_sets，2026-10 dating22 起）：每章场景是独立
+// 骨架，全部预载但只渲染当前阶段；引擎按章节行走规则跨阶段推进，切幕由
+// syncActivePhase 完成（换渲染骨架 + 按新场景重新取景）。
+let skelPhaseOfLayer = new Map() // layer -> 阶段键
+let animPhaseMap = {}            // 动画名 -> 阶段键
+let phaseOrder = []              // 有序阶段键（['1','2']）
+let activePhase = ''             // 当前渲染的阶段
+
+function isActiveSkel(l) {
+  return !skelPhaseOfLayer.size || !skelPhaseOfLayer.has(l) || skelPhaseOfLayer.get(l) === activePhase
+}
+
+function buildPhaseMaps() {
+  skelPhaseOfLayer = new Map()
+  animPhaseMap = {}
+  phaseOrder = []
+  activePhase = ''
+  const sets = props.skin && props.skin.asset && props.skin.asset.skel_sets
+  if (!sets) return
+  phaseOrder = Object.keys(sets).sort((a, b) => Number(a) - Number(b))
+  // 归一化去 .skel 后缀再比对：skel_sets 值是文件名（带 .skel），层名两种宿主
+  // 不一致（预览带 .skel / 壁纸不带）——不归一化会全部漏配，引擎退回单骨架
+  // 模式，跨章探测就会 "Animation not found"
+  const norm = (s) => String(s || '').replace(/\.skel$/i, '')
+  for (const l of layers) {
+    if (!l.skeleton) continue
+    const stem = norm(l.name)
+    const ph = phaseOrder.find((k) => norm(sets[k]) === stem)
+    if (!ph) continue
+    skelPhaseOfLayer.set(l, ph)
+    for (const a of l.data.animations) animPhaseMap[a.name] = ph
+  }
+  activePhase = phaseOrder[0] || ''
+}
+
+function skelLayerOfAnim(name) {
+  return layers.find((l) => l.skeleton && l.data.animations.some((a) => a.name === name)) || null
+}
+
+// 统一的整段播放入口：跨阶段动画（别的章节骨架）开始时同步换幕
+function playFullPhase(name, loop, opts) {
+  const ok = window.BD2Interact.playFull(layers, name, loop, undefined, opts)
+  if (ok) syncActivePhase(name)
+  return ok
+}
+
+function syncActivePhase(animName) {
+  if (!phaseOrder.length || !animName) return
+  const ph = animPhaseMap[animName]
+  if (!ph || ph === activePhase) return
+  activePhase = ph
+  boundsCache = charCenterCache = null // 新场景重新取景（旧边界是上一阶段的）
+  applyCharacterFit()
+  computeBounds()
+}
+
+// 阶段感知的合并 profile：全部骨架动画名取并集（阶段间动画名天然不重），
+// animPhase/phases 注入后引擎按阶段隔离探测、跨阶段桥接
+function ensureBd2Profile() {
+  if (bd2Profile) return bd2Profile
+  const l0 = layers.find((l) => l.skeleton)
+  if (!l0 || !window.BD2Interact) return null
+  const merged = []
+  const animSeen = new Set()
+  for (const l of layers) {
+    if (!l.skeleton) continue
+    for (const a of l.data.animations) {
+      if (!animSeen.has(a.name)) { animSeen.add(a.name); merged.push(a.name) }
+    }
+  }
+  bd2Profile = window.BD2Interact.detect(merged)
+  if (skelPhaseOfLayer.size) {
+    bd2Profile.animPhase = animPhaseMap
+    bd2Profile.phases = phaseOrder.slice()
+  }
+  if (bd2Profile.style === 'mix' && l0.state) {
+    window.BD2Interact.computeMotionTargets(bd2Profile, (anim) => {
+      const owner = skelLayerOfAnim(anim) || l0
+      const st = new owner.state.constructor(owner.state.data)
+      const sk = new owner.skeleton.constructor(owner.skeleton.data)
+      return { state: st, skeleton: sk }
+    })
+  }
+  return bd2Profile
+}
 let bd2MotionCdUntil = 0   // 整身动作冷却
 let bd2VoiceAt = 0         // 语音节流
 let voiceCues = []         // 已解码 cue 名数组（mood 引擎按区域情绪过滤）
@@ -198,8 +372,12 @@ async function loadBg(cfg) {
 
 function pickAnim(data) {
   const names = data.animations.map((a) => a.name)
+  // 与壁纸模板同步：优先角色常驻的循环/待机（loop_N/idle/normal），跳过转场
+  // （chain/cut_*/login 等 t=0 人物不在构图，取其取景会框错——Ultimate 演出皮
+  //  默认选到 chain 会导致导出后只见背景不见人物，已实测）
+  const loop = names.find((n) => /^loop/i.test(n))
   const idle = names.find((n) => /idle/i.test(n)) || names.find((n) => n === 'normal')
-  return idle || names[0] || ''
+  return loop || idle || names[0] || ''
 }
 
 // 表情类动画判定：碧蓝 spine 的数字动画（1/2/3...）是"表情集"——只含 1 帧
@@ -213,6 +391,7 @@ function isExpression(name, data) {
 
 function playAnimation(name) {
   if (!layers.length) return
+  syncActivePhase(name) // 指定了别的阶段骨架的动画时换幕
   for (const l of layers) {
     if (!l.skeleton) continue
     if (!name) {
@@ -248,9 +427,16 @@ function playAnimation(name) {
 // ============ Spine 互动（drag/touch 两类互动皮肤） ============
 
 function animNames() {
-  // 所有骨架层的动画名集合（取第一层的即可，多层骨架动画名一致）
-  const skel = layers.find((l) => l.skeleton)
-  return skel ? skel.data.animations.map((a) => a.name) : []
+  // 所有骨架层动画名并集（单骨架皮肤与原来一致；阶段骨架皮肤覆盖全部章节）
+  const names = []
+  const seen = new Set()
+  for (const l of layers) {
+    if (!l.skeleton) continue
+    for (const a of l.data.animations) {
+      if (!seen.has(a.name)) { seen.add(a.name); names.push(a.name) }
+    }
+  }
+  return names
 }
 function hasAnim(name) {
   const names = animNames()
@@ -350,10 +536,21 @@ function onInteractComplete(entry) {
   if (!entry || entry.trackIndex !== 0) return
   if (entry.loop) return // 循环动画每圈 complete 不处理（ex/normal 由 spine 自动续圈）
   const name = entry.animation ? entry.animation.name : ''
-  // BD2 mix/motion 整段演出播完 → 平滑淡入待机循环（bd2IdleAfter 在触发时记下）
+  // BD2 mix/motion 整段演出播完 → 链式续播或平滑淡入待机循环
   if (bd2FullPlaying && /^(motion|mix\d+_|_face)/.test(name)) {
     bd2FullPlaying = false
-    window.BD2Interact.playFull(layers, bd2IdleAfter, true, undefined, { cleanSwitch: true })
+    const nxt = bd2ChainNext && window.BD2Interact.advanceAuto
+      ? window.BD2Interact.advanceAuto(bd2Profile, bd2ChainNext) : null
+    if (nxt) {
+      // 链式章节（连续演出）：自动续播下一段，中间不回家 idle（回 idle 会闪）
+      bd2IdleAfter = nxt.idle || bd2IdleAfter
+      bd2ChainNext = nxt.chain || null
+      bd2FullPlaying = true
+      playFullPhase(nxt.anim, false, { cleanSwitch: true })
+      return
+    }
+    bd2ChainNext = null
+    playFullPhase(bd2IdleAfter, true, { cleanSwitch: true })
     return
   }
   if (interactState === 'drag') {
@@ -491,7 +688,7 @@ function layerBounds(l) {
     // 否则会把包围盒撑到巨大、角色被“挤”出视野（云龙-溶于重重夜色 的典型问题）
     if (slot.color && slot.color.a < 0.01) continue
     if ((att.name || '').toLowerCase().startsWith('kkkkk')) continue
-    if (isBgPanelSlot(slot)) continue // 全屏背景网格/黑边面板不参与取景
+    if (isBgPanelSlot(slot) || slot._maskPanel) continue // 背景网格/画幅遮罩不参与取景
     const isRegion = att instanceof spine.RegionAttachment
     if (!isRegion && !(att instanceof spine.MeshAttachment) && !(att instanceof spine.BoundingBoxAttachment)) continue
     const len = isRegion ? 8 : att.worldVerticesLength
@@ -515,13 +712,13 @@ function contentFrame() {
   const raw = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
   const items = []
   for (const l of layers) {
-    if (!l.skeleton) continue
+    if (!l.skeleton || !isActiveSkel(l)) continue
     for (const slot of l.skeleton.slots) {
       const att = slot.getAttachment()
       if (!att) continue
       if (slot.color && slot.color.a < 0.01) continue
       if ((att.name || '').toLowerCase().startsWith('kkkkk')) continue
-      if (isBgPanelSlot(slot)) continue // 全屏背景网格/黑边面板不参与取景
+      if (isBgPanelSlot(slot) || slot._maskPanel) continue // 背景网格/画幅遮罩不参与取景
       const isRegion = att instanceof spine.RegionAttachment
       const isMesh = att instanceof spine.MeshAttachment
       if (!isRegion && !isMesh) continue
@@ -585,18 +782,23 @@ function contentFrame() {
   return { minX: fminX - padX, maxX: fmaxX + padX, minY: fminY - padY, maxY: fmaxY + padY }
 }
 
-function computeBounds() {
+function computeBaseBounds() {
   // 边界只算一次并缓存：动画帧里的超大特效部件会瞬间撑爆边界，
   // 导致拖拽/缩放时相机拉远出现“全屏虚影”。
   if (boundsCache) return boundsCache
+  // 旋转支点与取景同源：人物层并集中心（首次冷路径计算，随 boundsCache 失效）
+  if (charCenterCache === null) charCenterCache = computeCharCenter()
   // 独立背景图（Ultimate 正方形背景图等）：以背景图世界尺寸为取景框，
   // 角色在背景内自然显示、不填满整个画面（避免“角色太大”）。
   // 背景世界尺寸与 drawBg 一致：cover 铺满角色取景框 + 15% 外扩，中心对齐
   // 角色中心——cover 保证背景必然包含角色，框背景不会裁角色。
-  const bgImgLayer = layers.find((l) => l.bg)
-  if (bgImgLayer && bgImgLayer.bg && bgImgLayer.bg.width > 0) {
-    const img = bgImgLayer.bg
-    const skelPer = layers.filter((l) => l.skeleton).map(layerBounds).filter((b) => Number.isFinite(b.minX))
+  // 若启用了外部/自定义扩图等背景（hideDefaultBg），跳过默认背景图取景，按主体角色取景（与壁纸模板一致）
+  const bgImg = (!props.hideDefaultBg)
+    ? (activeBgSetImg() || layers.find((l) => l.bg)?.bg)
+    : null
+  if (bgImg && bgImg.width > 0) {
+    const img = bgImg
+    const skelPer = layers.filter((l) => l.skeleton && isActiveSkel(l)).map(layerBounds).filter((b) => Number.isFinite(b.minX))
     if (skelPer.length) {
       const cb = {
         minX: Math.min(...skelPer.map((b) => b.minX)),
@@ -627,7 +829,7 @@ function computeBounds() {
   // 包围盒带偏（如 新泽西·月下起舞：人物巨大、背景被挤成一条）。
   // 护栏：背景面积超过主体层 8 倍时视为装饰性大背景，回退常规取景
   //（避免把云朵类大背景重新撑爆取景）。
-  const bgLayers = layers.filter(isBgLayer)
+  const bgLayers = props.hideDefaultBg ? [] : layers.filter(isBgLayer)
   if (bgLayers.length) {
     const bgFrame = layerBounds(bgLayers[0])
     const nonBg = layers
@@ -673,7 +875,7 @@ function computeBounds() {
   }
   // 多部件皮肤（角色+背景）中，背景层面积远大于主体层；取景只按主体层算，
   // 背景/特效层照常渲染但不参与取景，避免角色被巨大的背景“挤”出视野。
-  const per = layers.filter((l) => l.skeleton).map(layerBounds).filter((b) => Number.isFinite(b.minX))
+  const per = layers.filter((l) => l.skeleton && isActiveSkel(l)).map(layerBounds).filter((b) => Number.isFinite(b.minX))
   if (!per.length) {
     boundsCache = { minX: -1, maxX: 1, minY: -1, maxY: 1 }
     return boundsCache
@@ -701,13 +903,13 @@ function denseAreaFrame() {
   const raw = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
   const items = []
   for (const l of layers) {
-    if (!l.skeleton) continue
+    if (!l.skeleton || !isActiveSkel(l)) continue
     for (const slot of l.skeleton.slots) {
       const att = slot.getAttachment()
       if (!att) continue
       if (slot.color && slot.color.a < 0.01) continue
       if ((att.name || '').toLowerCase().startsWith('kkkkk')) continue
-      if (isBgPanelSlot(slot)) continue // 全屏背景网格/黑边面板不参与取景
+      if (isBgPanelSlot(slot) || slot._maskPanel) continue // 背景网格/画幅遮罩不参与取景
       const isRegion = att instanceof spine.RegionAttachment
       const isMesh = att instanceof spine.MeshAttachment
       if (!isRegion && !isMesh) continue
@@ -775,6 +977,32 @@ function denseAreaFrame() {
   const padX = fW * 0.12
   const padY = fH * 0.12
   return { minX: fminX - padX, maxX: fmaxX + padX, minY: fminY - padY, maxY: fmaxY + padY }
+}
+
+// 取景 = 基础取景框（缓存）按人物旋转外扩。取景支点【不含人物独立偏移】：
+// 偏移是旋转后的刚体平移（渲染支点 charPivot 才跟随偏移），若取景 AABB 用
+// 含偏移的支点，拖动人物时 AABB 会跟着平移——背景矩形锚定在 AABB 中心，
+// 会跟着人物一起挪（=“拖动人物背景跟着扭”的病根，2026-10 实测）。
+// 取景框静态后，拖动行为与未旋转时完全一致（人物动、背景/取景不动）。
+// 旋转为 0 时直接返回缓存，行为与旧版完全一致。
+function computeBounds() {
+  const base = computeBaseBounds()
+  const deg = props.rotation || 0
+  if (!deg) return base
+  const piv = charCenterCache || { x: (base.minX + base.maxX) / 2, y: (base.minY + base.maxY) / 2 }
+  const aabb = WL.rotateBoundsAabb(base, deg, piv.x, piv.y)
+  // 取景按高度铺 MARGIN（spineCamera 语义），宽出 16:9 的旋转姿态（竖长人物
+  // 转到接近 90°）会横向出界——把取景框高度对称补到 宽×MARGIN/16:9，让宽度
+  // 约束生效（等效该角度下自动缩小）。常规倾角 AABB 高大于补足值，不受影响。
+  const w = aabb.maxX - aabb.minX
+  const h = aabb.maxY - aabb.minY
+  const needH = (w * WL.MARGIN) / WL.ASPECT
+  if (needH > h) {
+    const cy = (aabb.minY + aabb.maxY) / 2
+    aabb.minY = cy - needH / 2
+    aabb.maxY = cy + needH / 2
+  }
+  return aabb
 }
 
 function applyLayout() {
@@ -875,15 +1103,22 @@ function boxToScreen(box, cw, ch) {
   const sy1 = ch / 2 - (box.maxY - cam.position.y) / z
   const sy2 = ch / 2 - (box.minY - cam.position.y) / z
   const left = Math.min(sx1, sx2), top = Math.min(sy1, sy2)
-  return {
-    style: {
-      left: left + 'px',
-      top: top + 'px',
-      width: Math.abs(sx2 - sx1) + 'px',
-      height: Math.abs(sy2 - sy1) + 'px',
-    },
-    world: box,
+  const style = {
+    left: left + 'px',
+    top: top + 'px',
+    width: Math.abs(sx2 - sx1) + 'px',
+    height: Math.abs(sy2 - sy1) + 'px',
   }
+  // 人物旋转时叠加框同步转：以支点的屏幕投影为 transform-origin 旋转（屏幕
+  // 刚体变换与"世界绕支点旋转 → 相机投影"等价，相机本身无旋转）
+  if (props.rotation) {
+    const piv = charPivot()
+    const pxs = (piv.x - cam.position.x) / z + cw / 2
+    const pys = ch / 2 - (piv.y - cam.position.y) / z
+    style.transform = `rotate(${props.rotation}deg)`
+    style.transformOrigin = `${pxs - left}px ${pys - top}px`
+  }
+  return { style, world: box }
 }
 
 function updateInteractiveOverlay() {
@@ -921,7 +1156,7 @@ function updateInteractiveOverlay() {
   }
   // 数据集无该皮肤时兜底：整体一个"拖拽"框（用角色包围盒）
   if (!areas.length) {
-    const main = layers.filter((l) => l.skeleton && !isBgLayer(l)).map(layerBounds).filter((b) => Number.isFinite(b.minX))
+    const main = layers.filter((l) => l.skeleton && !isBgLayer(l) && isActiveSkel(l)).map(layerBounds).filter((b) => Number.isFinite(b.minX))
     if (main.length) {
       const box = {
         minX: Math.min(...main.map((b) => b.minX)),
@@ -955,10 +1190,76 @@ function isBgPanelSlot(slot) {
   return slot._bp
 }
 
+// 「画幅遮罩」插槽：约会皮骨架里贴在场景四周/外圈的巨型暗色面板（游戏用于
+// 不同宽高比的画幅外遮盖），如 FR 边框（dating15/11）、BK2/3/4 三块围板
+//（dating13）、black1-4 四侧板（dating9）、black glow side_re*（dating19）、
+// hit_cut_BG1-5（dating21）。它们把取景包围盒撑到场景的 4~14 倍，角色被挤小、
+// 画面只剩黑边框。判定 = 名字命中 + 面积 ≥ 全部附件面积中位数 8 倍（双门槛，
+// 避免误伤 black_wings_l/r 翅膀、blackdress_N 裙等同名身体部件）。
+// 命中者不参与取景（layerBounds/contentFrame/denseAreaFrame 跳过），照常渲染
+// ——相机收进场景后它们在视野外，不会入画。与模板 wallpaper_spine.html 同步。
+function isMaskSlotName(nm) {
+  nm = (nm + '').toLowerCase().trim()
+  if (nm === 'fr' || /^fr\s*\(\d+\)$/.test(nm)) return true // FR / fr (1013) 画幅边框
+  if (nm.indexOf('bk') === 0) return true // BK / BK4 / BK _type2 围板
+  if (nm === 'black' || /^black\d/.test(nm)) return true // black / black2-4 侧板
+  if (nm === 'black_all' || nm === 'black_blur') return true
+  if (nm.indexOf('black glow') === 0) return true // black glow side_re* 侧板
+  if (nm.indexOf('hit_cut_bg') === 0) return true // hit_cut_BG1-5 四侧板
+  return false
+}
+
+// 在骨架加载后（t=0 姿态）调用一次：给命中的插槽打 _maskPanel 标记
+function markMaskSlots() {
+  const areas = []
+  const infos = []
+  for (const l of layers) {
+    if (!l.skeleton) continue
+    for (const slot of l.skeleton.slots) {
+      const att = slot.getAttachment()
+      slot._maskPanel = false
+      if (!att) continue
+      if (slot.color && slot.color.a < 0.01) continue
+      if ((att.name || '').toLowerCase().startsWith('kkkkk')) continue
+      if (isBgPanelSlot(slot)) continue
+      const isRegion = att instanceof spine.RegionAttachment
+      const isMesh = att instanceof spine.MeshAttachment
+      if (!isRegion && !isMesh) continue
+      const len = isRegion ? 8 : att.worldVerticesLength
+      if (!len) continue
+      const verts = spine.Utils.newFloatArray(len)
+      if (isRegion) att.computeWorldVertices(slot, verts, 0, 2)
+      else att.computeWorldVertices(slot, 0, len, verts, 0, 2)
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (let j = 0; j < len; j += 2) {
+        if (verts[j] < minX) minX = verts[j]
+        if (verts[j] > maxX) maxX = verts[j]
+        if (verts[j + 1] < minY) minY = verts[j + 1]
+        if (verts[j + 1] > maxY) maxY = verts[j + 1]
+      }
+      const a = (maxX - minX) * (maxY - minY)
+      if (a > 0) { areas.push(a); infos.push({ slot, area: a }) }
+    }
+  }
+  if (!areas.length) return
+  areas.sort((x, y) => x - y)
+  const median = areas[Math.floor(areas.length / 2)] || 1
+  for (const it of infos) {
+    if (it.area >= median * 8 && isMaskSlotName(it.slot.data && it.slot.data.name)) {
+      it.slot._maskPanel = true
+    }
+  }
+}
+
 // 背景层永远先画：碧蓝多层皮肤的 layers 顺序来自文件名排序，不保证 B 在前
-//（如 duyisibao_2 是 [主, B]，按原序画背景会盖住人物）
+//（如 duyisibao_2 是 [主, B]，按原序画背景会盖住人物）。
+// 阶段骨架（多章约会皮）：只渲染当前阶段，其余阶段骨架已预载但不画。
 function renderOrder() {
-  return [...layers.filter(isBgLayer), ...layers.filter((l) => !isBgLayer(l))]
+  const skels = layers.filter((l) => l.skeleton && isActiveSkel(l))
+  if (props.hideDefaultBg) {
+    return skels.filter((l) => !isBgLayer(l))
+  }
+  return [...layers.filter(isBgLayer), ...skels.filter((l) => !isBgLayer(l))]
 }
 
 // 风景/场景型皮肤的“人物适配”：当人物（非背景层）从头到脚明显大于背景层时
@@ -974,7 +1275,7 @@ function applyCharacterFit() {
   if (!bgLayers.length) return
   const bgFrame = layerBounds(bgLayers[0])
   if (!Number.isFinite(bgFrame.minX)) return
-  const charLayers = layers.filter((l) => l.skeleton && !isBgLayer(l))
+  const charLayers = layers.filter((l) => l.skeleton && !isBgLayer(l) && isActiveSkel(l))
   if (!charLayers.length) return
   const per = charLayers.map(layerBounds).filter((b) => Number.isFinite(b.minX))
   if (!per.length) return
@@ -1004,12 +1305,13 @@ function render() {
   // 诊断：帧计数 + 互动状态 + 第一个骨架 track0 的动画时间（判断「动画是否还在推进」）
   let _t = ''
   const _l0 = layers.find((l) => l.skeleton && l.state)
-  if (_l0) {
-    const _e = _l0.state.getCurrent(0)
-    if (_e && _e.animation) _t = `${_e.animation.name}@${_e.trackTime.toFixed(1)}s${_e.loop ? '(loop)' : ''}`
-    else _t = 'no-anim'
-  } else _t = 'no-skel'
-  dbgText.value = `帧${++_dc} ${interactState} ${_t}${paused ? ' PAUSED' : ''}${disposed ? ' DISPOSED' : ''}`.slice(0, 90)
+    if (_l0) {
+      const _e = _l0.state.getCurrent(0)
+      if (_e && _e.animation) _t = `${_e.animation.name}@${_e.trackTime.toFixed(1)}s${_e.loop ? '(loop)' : ''}`
+      else _t = 'no-anim'
+    } else _t = 'no-skel'
+    const _v = window.BD2Interact && window.BD2Interact.VERSION ? ' 引擎' + window.BD2Interact.VERSION : ''
+    dbgText.value = `帧${++_dc} ${interactState} ${_t}${_v}${paused ? ' PAUSED' : ''}${disposed ? ' DISPOSED' : ''}`.slice(0, 90)
   if (disposed || paused) {
     // 非 disposed 的暂停只是 keep-alive 切走，切回时会恢复 rAF；disposed 直接停
     if (!disposed && paused) raf = 0
@@ -1030,9 +1332,23 @@ function render() {
       applyLayout()
     }
     // 骨骼/动画推进：即使某层异常也只影响该层，不中断整帧
+    // 计算角色独立偏移（世界坐标），与整体偏移区分：只移动骨架，背景保持不动
+    const _cw = canvas.clientWidth || 1
+    const _ch = canvas.clientHeight || 1
+    const _zoom = renderer.camera.zoom || 1
+    const _charOff = WL.charOffsetWorld(props.charOffsetX, props.charOffsetY, _cw, _ch, _zoom)
     for (const l of layers) {
       if (!l.skeleton) continue
       try {
+        // 角色独立位置偏移：只对非背景层（character）生效，背景层/BG 图保持不动
+        if (!isBgLayer(l) && (_charOff.x || _charOff.y)) {
+          l.skeleton.x = (l.charBaseX ?? l.skeleton.x) + _charOff.x
+          l.skeleton.y = (l.charBaseY ?? l.skeleton.y) + _charOff.y
+        } else {
+          // 无偏移或背景层：恢复 base 位置，避免累积
+          if (l.charBaseX !== undefined) l.skeleton.x = l.charBaseX
+          if (l.charBaseY !== undefined) l.skeleton.y = l.charBaseY
+        }
         l.state.update(delta)
         l.state.apply(l.skeleton)
         l.skeleton.updateWorldTransform()
@@ -1048,19 +1364,57 @@ function render() {
   raf = requestAnimationFrame(render)
 }
 
+// 把"绕世界点 (px,py) 旋转 deg"右乘进相机投影（列主序原地乘）：
+// PV' = PV × M，顶点先经世界旋转再进相机。只在人物层绘制段生效——
+// enableRenderer 在 end() 后重新绑定 MVP 读到的是改写后的矩阵，而下一帧
+// begin() 的 camera.update() 会重建 projectionView，无需还原。
+const _rotTmp = new Array(16)
+function _applyProjectionRotation(deg, px, py) {
+  const v = renderer.camera.projectionView.values
+  const m = WL.charRotationMatrixValues(deg, px, py)
+  for (let c = 0; c < 4; c++) {
+    for (let r = 0; r < 4; r++) {
+      _rotTmp[c * 4 + r] = v[r] * m[c * 4] + v[4 + r] * m[c * 4 + 1] + v[8 + r] * m[c * 4 + 2] + v[12 + r] * m[c * 4 + 3]
+    }
+  }
+  for (let i = 0; i < 16; i++) v[i] = _rotTmp[i]
+}
+
 // 每帧的实际绘制（独立成函数便于隔离 overlay/背景等辅助逻辑的异常）
 function clearRenderFrame() {
   try { updateInteractiveOverlay() } catch (e) { console.warn('[spine-render] overlay 异常:', e.message || e) }
   gl.clearColor(0, 0, 0, 0)
   gl.clear(gl.COLOR_BUFFER_BIT)
   renderer.begin()
-  // 独立背景图：铺在角色层下面，覆盖整个取景框
-  for (const l of layers) {
-    if (!l.bg) continue
-    try { drawBg(l.bg) } catch (e) { console.warn('[spine-render] bg 异常:', e.message || e) }
+  // 独立背景图：铺在角色层下面，覆盖整个取景框。
+  // Ultimate 多阶段背景（bg_sets）：只画当前动画对应组；否则逐张画默认背景。
+  // 若启用了自定义背景/场景背景/纯色/渐变等样式（hideDefaultBg），隐藏内置默认背景，避免重叠出现两个背景
+  if (!props.hideDefaultBg) {
+    const setImg = activeBgSetImg()
+    if (setImg) {
+      try { drawBg(setImg) } catch (e) { console.warn('[spine-render] bg 异常:', e.message || e) }
+    } else {
+      for (const l of layers) {
+        if (!l.bg) continue
+        try { drawBg(l.bg) } catch (e) { console.warn('[spine-render] bg 异常:', e.message || e) }
+      }
+    }
   }
-  for (const l of renderOrder()) {
-    if (!l.skeleton) continue
+  // 背景骨架层（场景层）不参与人物旋转，与背景图同批绘制
+  const order = renderOrder()
+  for (const l of order) {
+    if (!l.skeleton || !isBgLayer(l)) continue
+    renderer.drawSkeleton(l.skeleton, true)
+  }
+  // 人物旋转：背景批 flush 后改写投影，再画人物层（旋转 0 时与旧版同批，无额外开销）
+  const deg = props.rotation || 0
+  if (deg && order.some((l) => l.skeleton && !isBgLayer(l))) {
+    renderer.end()
+    const piv = charPivot()
+    _applyProjectionRotation(deg, piv.x, piv.y)
+  }
+  for (const l of order) {
+    if (!l.skeleton || isBgLayer(l)) continue
     renderer.drawSkeleton(l.skeleton, true)
   }
   renderer.end()
@@ -1082,11 +1436,14 @@ function drawBg(img) {
     bgTexCache = new spine.GLTexture(gl, img)
     bgTexCache._img = img
   }
-  // 背景基于角色取景框绘制（bounds-based）：随角色缩放/偏移等比联动，
-  // 用户可通过缩放滑块调整背景大小（viewport-based 会让背景永远撑满画面、
-  // 缩放只裁切不缩放，导致"背景无法调整大小"）。
-  // cover 铺满取景框 + 15% 外扩，再乘独立背景缩放 bgScale（%），
-  // 实现「单独调节背景大小」；透明区透出下层（壁纸/页面背景色），避免露底。
+  // 背景【世界空间锚定】：绘制在取景框（computeBounds 的背景图 cover 矩形）上，
+  // 与角色同处一个世界坐标系——构图跨画布/跨设备恒定（预览画布宽高比 ≠ 显示器
+  // 宽高比时，视口锚定画法的人物与舞台相对构图会漂移 = Ultimate 系"预览≠导出"
+  // 的根源，勿改回视口锚定）。
+  // 人物/背景独立调节在此画法下的实现：
+  //   位置：charOffset 只移骨架 / bgOffset 只移本矩形（互相独立 ✓）
+  //   缩放：scale 走相机 zoom（人物+背景联动）；人物模式滚轮缩放时宿主自动
+  //         反向补偿 bgScale（见 onCanvasWheel），使背景屏幕大小恒定 = 真解耦
   const bounds = computeBounds()
   const bw = bounds.maxX - bounds.minX
   const bh = bounds.maxY - bounds.minY
@@ -1098,29 +1455,103 @@ function drawBg(img) {
   const h = ih * scale
   const cx = (bounds.minX + bounds.maxX) / 2
   const cy = (bounds.minY + bounds.maxY) / 2
+  // 背景独立位移（bgOffsetX/Y % 画布 → 世界坐标，与角色独立偏移同一换算）：
+  // 只移动背景矩形，角色不动
+  const cv = canvasRef.value
+  const bgOff = WL.charOffsetWorld(
+    props.bgOffsetX, props.bgOffsetY,
+    (cv && cv.clientWidth) || 0, (cv && cv.clientHeight) || 0,
+    renderer.camera.zoom || 1,
+  )
   // 直通 alpha 混合（透明区透出下层），画完恢复（角色 drawSkeleton 用自身混合）。
   // Spine 4.1 blend 三参：setBlendMode(srcColor, srcAlpha, dst) = blendFuncSeparate；
   // 直通 alpha = (SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA)；预乘 = (ONE, ONE, ONE_MINUS_SRC_ALPHA)。
   renderer.batcher.setBlendMode(gl.SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-  renderer.drawTexture(bgTexCache, cx - w / 2, cy - h / 2, w, h)
+  renderer.drawTexture(bgTexCache, cx - w / 2 + bgOff.x, cy - h / 2 + bgOff.y, w, h)
   renderer.batcher.setBlendMode(gl.ONE, gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 }
 
 watch(
-  () => [props.scale, props.bgScale, props.offsetX, props.offsetY, props.alignment],
+  () => [props.scale, props.bgScale, props.offsetX, props.offsetY, props.alignment, props.rotation],
   () => applyLayout(),
 )
 
 watch(
   () => props.animation,
-  (v) => v && playAnimation(v),
+  (v) => {
+    if (!v) return
+    boundsCache = charCenterCache = null
+    playAnimation(v)
+    for (const l of layers) {
+      if (!l.skeleton) continue
+      l.state.update(0)
+      l.state.apply(l.skeleton)
+      l.skeleton.updateWorldTransform()
+    }
+    computeBounds()
+    applyLayout()
+  },
 )
+
+watch(
+  () => props.hideDefaultBg,
+  () => {
+    boundsCache = charCenterCache = null
+    computeBounds()
+    applyLayout()
+  },
+)
+
+function hasWebGlBg() {
+  if (props.hideDefaultBg) return false
+  return Boolean(activeBgSetImg()) || layers.some((l) => l.bg)
+}
 
 function onCanvasWheel(e) {
   e.preventDefault()
   const factor = Math.pow(1.1, -e.deltaY / 100)
-  const next = WL.clampScale(props.scale * factor)
-  emit('scaleChange', Math.round(next))
+  // 版式调节目标=背景：滚轮只缩放背景（30~300%，与背景缩放滑块同范围）
+  if (props.adjustTarget === 'bg') {
+    const nextBg = Math.max(30, Math.min(300, Math.round(props.bgScale * factor)))
+    if (nextBg !== props.bgScale) emit('bgScaleChange', nextBg)
+    return
+  }
+  const next = Math.round(WL.clampScale(props.scale * factor))
+  emit('scaleChange', next)
+
+  // 版式调节目标=画面（整体缩放：整张构图融合缩放）
+  // 相机 zoom 缩放人物、bgScale 同步缩放 CSS 背景之外，三类偏移锚点（整体/
+  // 人物/背景）也按同一比例 k 缩放：偏移是屏幕锚定语义（%取景框，不随 zoom
+  // 变），若只放大不缩锚点，独立偏移过的人物/背景会绕各自锚点生长，相对排布
+  // 越缩越散（= 用户报的"越缩放分离越大"）。锚点同步缩放后整张构图如照片般
+  // 以画面中心为支点融合缩放。全部 0 偏移时 0×k 仍为 0，无副作用。
+  // 中心对齐下精确；非中心对齐另有 (0.5-ax)·取景框 常数项不随缩放（既有限制）。
+  if (props.adjustTarget === 'stage') {
+    if (next !== props.scale && props.scale > 0) {
+      const k = next / props.scale
+      const sc = (v) => Math.round(WL.clampOffset((v || 0) * k))
+      emit('panChange', { x: sc(props.offsetX), y: sc(props.offsetY) })
+      emit('charOffsetChange', { x: sc(props.charOffsetX), y: sc(props.charOffsetY) })
+      emit('bgOffsetChange', { x: sc(props.bgOffsetX), y: sc(props.bgOffsetY) })
+      // CSS 背景（!hasWebGlBg）不受相机 zoom 影响，bgScale 按同一比例 k 同步
+      //（scale 触顶/触底时 k=1，背景同步停住）；WebGL 背景在世界空间随相机自然联动。
+      if (!hasWebGlBg()) {
+        const nextBg = Math.max(30, Math.min(300, Math.round(props.bgScale * k)))
+        if (nextBg !== props.bgScale) emit('bgScaleChange', nextBg)
+      }
+    }
+    return
+  }
+
+  // 版式调节目标=人物（只缩放人物，背景保持不动）
+  // 对于 CSS 背景（!hasWebGlBg）：相机 zoom 不影响 CSS，因此 bgScale 保持不变即可实现“背景不动”；
+  // 仅对于 WebGL 独立背景（hasWebGlBg）：由于相机 zoom 会联动背景画面大小，需反向补偿 bgScale 抵消相机 zoom，保持背景屏幕大小恒定
+  if (props.adjustTarget === 'char' && next !== props.scale && props.scale > 0) {
+    if (hasWebGlBg()) {
+      const comp = Math.max(30, Math.min(300, Math.round(props.bgScale * props.scale / next)))
+      if (comp !== props.bgScale) emit('bgScaleChange', comp)
+    }
+  }
 }
 
 // 命中检测：点击点（世界坐标）落在哪个 hitArea 世界框内
@@ -1134,6 +1565,20 @@ function screenToWorld(px, py) {
     x: (px - cw / 2) * z + cam.position.x,
     y: (ch / 2 - py) * z + cam.position.y,
   }
+}
+
+// 旋转取逆：人物渲染时被绕支点旋转了 deg（正=顺时针），点击命中检测要用
+// 未旋转的世界坐标——把屏幕→世界的点按支点转回去
+function unrotateWorldPoint(wx, wy) {
+  const deg = props.rotation || 0
+  if (!deg) return { x: wx, y: wy }
+  const piv = charPivot()
+  const t = (deg * Math.PI) / 180
+  const c = Math.cos(t)
+  const s = Math.sin(t)
+  const dx = wx - piv.x
+  const dy = wy - piv.y
+  return { x: piv.x + dx * c - dy * s, y: piv.y + dx * s + dy * c }
 }
 function hitAreaAt(wx, wy) {
   for (const a of hitAreas.value) {
@@ -1149,19 +1594,17 @@ function hitAreaAt(wx, wy) {
 // + 按区域情绪挑 Int_{Mood} 官方语音 + 点击特效粒子。返回 false 时回落旧逻辑。
 function tryBd2Interact(e) {
   if (!window.BD2Interact) return false
-  const l0 = layers.find((l) => l.skeleton)
+  const l0 = layers.find((l) => l.skeleton && isActiveSkel(l)) || layers.find((l) => l.skeleton)
   if (!l0) return false
   // 每点必触发：连续点击会中断当前 mix 演出，硬切到下一段互动（playFull cleanSwitch 硬切）。
-  if (!bd2Profile) {
-    bd2Profile = window.BD2Interact.detect(l0.data.animations.map((a) => a.name))
-    window.BD2Interact.resetMix() // 新皮肤 mix 序列从头开始
-  }
-  if (!bd2Profile.bd2) return false
+  // 兜底：enableInteraction 的预热未跑时（异常路径）在此重建
+  const profile = ensureBd2Profile()
+  if (!profile || !profile.bd2) return false
   // 顺序播放模型：点击任意位置都触发，位置不再参与决策
   const canvas = canvasRef.value
   const rect = canvas.getBoundingClientRect()
   const wp = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
-  const react = window.BD2Interact.decide(bd2Profile, [], null, wp,
+  const react = window.BD2Interact.decide(bd2Profile, [], null, unrotateWorldPoint(wp.x, wp.y),
                                           { motionCooldownUntil: bd2MotionCdUntil })
   if (!react) return false
   if (react.mode === 'overlay') {
@@ -1179,17 +1622,19 @@ function tryBd2Interact(e) {
     if (react.motion && hasAnim('motion')) {
       bd2FullPlaying = true
       bd2IdleAfter = pickAnim(l0.data)
-      window.BD2Interact.playFull(layers, 'motion', false, undefined, { cleanSwitch: true })
+      bd2ChainNext = null
+      playFullPhase('motion', false, { cleanSwitch: true })
       interactState = 'normal'
       currentIdle = 'normal'
       bd2MotionCdUntil = Date.now() + 12000
     }
   } else {
     // 第二代 mix/motion 整段演出：track0 单发（playFull 交叉淡化进出，避免硬切闪帧），
-    // complete 回待机循环（6s 冷却防连刷）
+    // complete 回待机循环（6s 冷却防连刷）；链式章节由 complete 自动续播下一段
     bd2FullPlaying = true
     bd2IdleAfter = react.idle || pickAnim(l0.data)
-    if (!window.BD2Interact.playFull(layers, react.anim, false, undefined, { cleanSwitch: true })) {
+    bd2ChainNext = react.chain || null
+    if (!playFullPhase(react.anim, false, { cleanSwitch: true })) {
       playAnimation(bd2IdleAfter) // 极端兜底：层缺动画则退回待机
     }
     interactState = 'normal'
@@ -1211,6 +1656,20 @@ function tryBd2Interact(e) {
 function onCanvasDown(e) {
   if (e.button !== 0) return
   e.preventDefault()
+  // 版式拖拽调节（人物/背景）：选中目标后拖动只调节该目标，点击不触发皮肤互动
+  //（"只调节当前选择的选项"——互动反应与版式调节互不干扰，切回"画面"恢复互动/平移）
+  if (props.adjustTarget === 'char' || props.adjustTarget === 'bg') {
+    const isChar = props.adjustTarget === 'char'
+    drag = {
+      x: e.clientX,
+      y: e.clientY,
+      target: props.adjustTarget,
+      ox: isChar ? props.charOffsetX : props.bgOffsetX,
+      oy: isChar ? props.charOffsetY : props.bgOffsetY,
+    }
+    canvasRef.value.style.cursor = 'move'
+    return
+  }
   // 互动模式下才触发互动逻辑（纯表情皮肤切表情、drag 皮肤拖拽反应、touch 系触摸）。
   // 注意：纯表情皮肤 isInteractiveSkin() 为 false 但同样需要互动（点击切表情），
   // 所以这里不 gate isInteractiveSkin——互动模式一律走互动逻辑，未命中区域再按皮肤类型分流。
@@ -1223,7 +1682,8 @@ function onCanvasDown(e) {
     }
     // 精确部位命中：hitArea 世界框（数据来自游戏 prefab 提取的参考数据集）
     const rect = canvasRef.value.getBoundingClientRect()
-    const wp = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+    const wp0 = screenToWorld(e.clientX - rect.left, e.clientY - rect.top)
+    const wp = unrotateWorldPoint(wp0.x, wp0.y)
     const area = hitAreaAt(wp.x, wp.y)
     // ★ drag 皮肤：直接走本地 drag 状态机（drag→ex→drag_ex→normal）。
     //   官方 config_client 对 drag 皮肤的规则也是 drag→ex / drag_ex→normal，
@@ -1366,7 +1826,13 @@ function enableInteraction() {
   // BD2 互动状态随皮肤重建（profile 在首次点击时按动画集探测）
   bd2Profile = null
   bd2FullPlaying = false
+  bd2ChainNext = null
   voiceCues = []
+  // 预热：皮肤加载阶段就完成动画集探测 + 附件指纹实测（章节配对/motion 终态），
+  // 避免首次点击时同步测量造成可感知的卡顿
+  if (ensureBd2Profile()) {
+    window.BD2Interact.resetMix() // 新皮肤 mix 序列从头开始
+  }
   // 注册互动动画完成监听：drag → ex，drag_ex → normal
   for (const l of layers) {
     if (l.skeleton && l.state) {
@@ -1381,15 +1847,36 @@ function onMove(e) {
   if (!drag) return
   drag.lastX = e.clientX
   drag.lastY = e.clientY
+  // 版式拖拽调节：拖动实时更新所选目标（人物/背景）的独立偏移（%）
+  // y 取反：向下拖 = 画面下方 = 世界坐标 y 减小，符合直觉
+  if (drag.target === 'char' || drag.target === 'bg') {
+    const canvas = canvasRef.value
+    const cw = canvas.clientWidth || 1
+    const ch = canvas.clientHeight || 1
+    const nx = WL.clampOffset(drag.ox + ((e.clientX - drag.x) / cw) * 100)
+    const ny = WL.clampOffset(drag.oy - ((e.clientY - drag.y) / ch) * 100)
+    if (drag.target === 'char') emit('charOffsetChange', { x: nx, y: ny })
+    else emit('bgOffsetChange', { x: nx, y: ny })
+    return
+  }
   // 互动模式：拖动不移动画面（只触发 drag 动画反应）
   if (props.interactionMode && isInteractiveSkin()) return
-  // 像素级直拖：屏幕坐标 → 世界坐标换算，保证跟手
+  // 像素级直拖：屏幕坐标 → 世界坐标换算，保证跟手。同时实时上报整体偏移，
+  // 让宿主侧 CSS 背景/滑块同步跟随（直拖只动了相机=人物，CSS 背景靠 offsetX
+  // 偏移锚点跟随；不上报的话拖动过程中人物动了、背景原地不动）。上报值经
+  // spineCamera 重算的相机位置与直拖结果逐像素相等（dx*zoom 项恒等），无跳变。
   const cam = renderer.camera
   const dx = e.clientX - drag.x
   const dy = e.clientY - drag.y
   cam.position.x = drag.camX - dx * drag.zoom
   cam.position.y = drag.camY + dy * drag.zoom
   cam.position.z = 0
+  const cw = canvasRef.value.clientWidth || 1
+  const ch = canvasRef.value.clientHeight || 1
+  emit('panChange', {
+    x: WL.clampOffset(drag.ox + (dx / cw) * 100),
+    y: WL.clampOffset(drag.oy + (dy / ch) * 100),
+  })
 }
 
 function onUp() {
@@ -1399,6 +1886,17 @@ function onUp() {
   const ch = canvas.clientHeight || 1
   const lx = drag.lastX != null ? drag.lastX : drag.x
   const ly = drag.lastY != null ? drag.lastY : drag.y
+  // 版式拖拽调节：松手时取整定值（滑块显示对齐），实时过程已按浮点跟手
+  if (drag.target === 'char' || drag.target === 'bg') {
+    const target = drag.target
+    const nx = Math.round(WL.clampOffset(drag.ox + ((lx - drag.x) / cw) * 100))
+    const ny = Math.round(WL.clampOffset(drag.oy - ((ly - drag.y) / ch) * 100))
+    drag = null
+    canvas.style.cursor = 'grab'
+    if (target === 'char') emit('charOffsetChange', { x: nx, y: ny })
+    else emit('bgOffsetChange', { x: nx, y: ny })
+    return
+  }
   const ox = Math.round(WL.clampOffset(drag.ox + ((lx - drag.x) / cw) * 100))
   const oy = Math.round(WL.clampOffset(drag.oy + ((ly - drag.y) / ch) * 100))
   drag = null
@@ -1425,6 +1923,8 @@ onMounted(async () => {
     // 卸载发生在材质加载期间：不能再用已卸载的 canvas / GL 上下文
     if (disposed) return
     layers = loaded
+    buildPhaseMaps() // 阶段骨架映射（多章约会皮 skel_sets；无则空操作）
+    await initBgSets() // 多阶段背景异步预载，在 computeBounds 之前就绪（保证与导出端取景一致）
     // 骨架层播放动画；背景图层无骨架，跳过
     const skelLayers = loaded.filter((l) => l.skeleton)
     // 互动皮肤：开场播 login（一次）→ 播完自动切 normal 循环；无 login 则直接
@@ -1442,6 +1942,8 @@ onMounted(async () => {
         l.state.apply(l.skeleton)
         l.skeleton.updateWorldTransform()
       }
+      // 画幅遮罩插槽标记（约会皮 FR/BK/black/hit_cut_BG 巨型围板）：取景前打标
+      markMaskSlots()
       applyCharacterFit()
       computeBounds()
       // 2) 再切入 login 开场（不重算取景，沿用 normal 的框）；
@@ -1456,8 +1958,15 @@ onMounted(async () => {
         l.state.apply(l.skeleton)
         l.skeleton.updateWorldTransform()
       }
+      markMaskSlots()
       applyCharacterFit()
       computeBounds()
+    }
+    // 记录角色独立偏移的基准位置（applyCharacterFit 之后）：渲染循环按
+    // charBaseX/Y + 偏移 计算，背景层不参与（isBgLayer 判定）。
+    for (const l of skelLayers) {
+      l.charBaseX = l.skeleton.x
+      l.charBaseY = l.skeleton.y
     }
     const anims = [...new Set(skelLayers.flatMap((l) => l.data.animations.map((a) => a.name)))]
     emit('animations', anims)

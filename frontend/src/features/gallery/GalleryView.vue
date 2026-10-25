@@ -23,25 +23,6 @@
             {{ multiMode ? '✓ 多选中' : '多选' }}
           </span>
         </div>
-        <div class="filter-panel">
-          <div class="filter-field">
-            <label>阵营</label>
-            <n-select v-model:value="filters.faction" :options="factionOptions" size="small" clearable placeholder="全部" />
-          </div>
-          <div class="filter-field">
-            <label>类型</label>
-            <n-select v-model:value="filters.hull" :options="hullOptions" size="small" clearable placeholder="全部" />
-          </div>
-          <div class="filter-field">
-            <label>动态能力</label>
-            <n-select v-model:value="filters.type" :options="typeOptions" size="small" />
-          </div>
-          <div class="filter-field">
-            <label>皮肤系列</label>
-            <n-select v-model:value="filters.theme" :options="themeOptions" size="small" clearable filterable placeholder="全部" />
-          </div>
-          <button class="wc-btn clear-filter-btn" @click="clearFilters">清空筛选</button>
-        </div>
         <div ref="railListRef" class="rail-list">
           <template v-if="skinMode">
             <div
@@ -106,14 +87,24 @@
               :bg-scale="bgScale"
               :offset-x="offsetX"
               :offset-y="offsetY"
+              :char-offset-x="charOffsetX"
+              :char-offset-y="charOffsetY"
+              :bg-offset-x="bgOffsetX"
+              :bg-offset-y="bgOffsetY"
+              :rotation="rotation"
+              :adjust-target="adjustTarget"
               :alignment="alignment"
               :interaction-mode="interactionMode"
               :show-hit-areas="showHitAreas"
               :intro="introOn"
+              :hide-default-bg="hideDefaultBg"
               @animations="onSpineAnims"
               @error="onEngineError"
               @scale-change="scale = $event"
               @pan-change="offsetX = $event.x; offsetY = $event.y"
+              @bg-scale-change="bgScale = $event"
+              @char-offset-change="charOffsetX = $event.x; charOffsetY = $event.y"
+              @bg-offset-change="bgOffsetX = $event.x; bgOffsetY = $event.y"
               @subtitle="l2dSubtitle = $event"
             />
             <StaticPreview
@@ -163,18 +154,26 @@
                     <small v-else style="opacity:.75">该皮肤无拖拽动画，互动模式下点击可切换表情</small>
                   </div>
                 </div>
+                <div class="l2d-switch-row adjust-row" title="选择拖动/滚轮的作用对象：拖动移动、滚轮缩放，只影响所选项">
+                  <div class="adjust-seg" :class="'at-' + adjustTarget">
+                    <div class="adjust-seg-thumb"></div>
+                    <button class="adjust-seg-item" :class="{ active: adjustTarget === 'stage' }" title="拖动平移整体画面" @click="adjustTarget = 'stage'">画面</button>
+                    <button class="adjust-seg-item" :class="{ active: adjustTarget === 'char' }" title="拖动只移动人物，滚轮只缩放人物" @click="adjustTarget = 'char'">人物</button>
+                    <button class="adjust-seg-item" :class="{ active: adjustTarget === 'bg' }" title="拖动只移动背景，滚轮只缩放背景" @click="adjustTarget = 'bg'">背景</button>
+                  </div>
+                </div>
                 <div class="l2d-switch-row">
                   <span class="l2d-switch-ico" :class="{ on: voiceEnabled }">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>
                   </span>
-                  <div class="l2d-switch-txt">互动语音<small>点击角色时播放台词</small></div>
+                  <div class="l2d-switch-txt">互动语音<small>开启时导出的壁纸带点击台词</small></div>
                   <span class="l2d-switch" :class="{ on: voiceEnabled }" :title="voiceEnabled ? '关闭互动语音与台词' : '开启互动语音与台词'" @click="toggleVoice"></span>
                 </div>
                 <div v-if="currentSkin.type === 'spine'" class="l2d-switch-row">
                   <span class="l2d-switch-ico" :class="{ on: showHitAreas }">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/></svg>
                   </span>
-                  <div class="l2d-switch-txt">交互区域<small>显示点击可触发区域</small></div>
+                  <div class="l2d-switch-txt">交互区域<small>开启时导出的壁纸带点击互动</small></div>
                   <span class="l2d-switch" :class="{ on: showHitAreas }" :title="showHitAreas ? '隐藏交互区域' : '显示交互区域'" @click="showHitAreas = !showHitAreas"></span>
                 </div>
                 <div v-if="currentSkin.type === 'spine' && spineHasLogin" class="l2d-switch-row">
@@ -193,7 +192,7 @@
                 </div>
               </div>
             </div>
-            <span class="zoom-hint">角色 {{ scale }}% · 背景 {{ bgScale }}%</span>
+            <span class="zoom-hint">角色 {{ scale }}% · 背景 {{ bgScale }}%<template v-if="adjustTarget !== 'stage'"> · 调节{{ adjustTarget === 'char' ? '人物' : '背景' }}</template></span>
             <button class="stage-fullscreen-btn" @click="toggleFullscreen" :title="fullscreen ? '退出全屏' : '全屏预览'">
               {{ fullscreen ? '✕' : '⛶' }}
             </button>
@@ -255,9 +254,9 @@
         <div class="panel-card">
           <div class="panel-title">外观</div>
           <div class="panel-field">
-            <label>背景</label>
-            <div class="panel-row">
-              <n-select v-model:value="bgStyle" :options="bgOptions" size="small" style="flex: 1" />
+            <label>背景模式</label>
+            <div class="bg-select-row">
+              <n-select v-model:value="bgStyle" :options="bgOptions" size="small" style="width: 100%" />
               <input
                 v-if="bgStyle === 'solid'"
                 v-model="solidColor"
@@ -265,6 +264,137 @@
                 class="solid-picker"
                 title="自定义纯色背景"
               />
+            </div>
+            <!-- 当前选用的背景提示行（若在自定义背景模式且已选图片） -->
+            <div v-if="bgStyle === 'image' && selectedBgImage" class="bg-current-row">
+              <span class="bg-current-name" :title="selectedBgImage">
+                <span class="bg-cur-icon">🖼</span>当前背景：{{ selectedBgName }}
+              </span>
+              <button class="bg-change-btn" @click="openBgModal" title="从背景库更换图片">更换</button>
+            </div>
+            <!-- 扩图与背景工作流工具盒（auto 和 image 均可用） -->
+            <div v-if="bgStyle === 'image' || bgStyle === 'auto'" class="bg-workflow-card">
+              <div class="bg-workflow-title">
+                <span>扩图与背景工具</span>
+                <button
+                  v-if="selectedBgImage || bgStyle !== 'auto'"
+                  class="bg-reset-link"
+                  @click="restoreOfficialBackground"
+                  title="还原为当前角色的官方默认背景"
+                >
+                  🔄 还原官方
+                </button>
+              </div>
+              <div class="bg-workflow-grid">
+                <button
+                  class="wc-btn small primary bg-wf-btn"
+                  :disabled="outpaintExporting"
+                  @click="doExportOutpaint"
+                  title="一键把当前角色的官方默认背景（或当前自定义背景）导出至 resources/output 供扩图"
+                >
+                  {{ outpaintExporting ? '导出中…' : '📤 导出当前背景' }}
+                </button>
+                <button
+                  class="wc-btn small primary bg-wf-btn"
+                  :disabled="importingOutpaint"
+                  @click="doImportOutpaint"
+                  title="扫描 resources/input（成品库）并智能选用；删除 input 里的图片即从列表移除"
+                >
+                  {{ importingOutpaint ? '导入中…' : '📥 导入扩图结果' }}
+                </button>
+              </div>
+              <div class="bg-workflow-sub">
+                <button
+                  class="wc-btn small bg-sub-btn"
+                  @click="openBgModal"
+                  title="打开背景选择弹窗，可从已处理扩图、自定义库或官方场景中挑选"
+                >
+                  🖼 背景库
+                </button>
+                <button
+                  class="wc-btn small bg-sub-btn"
+                  @click="openInputFolder"
+                  title="快捷打开 resources/input 目录"
+                >
+                  📁 input
+                </button>
+                <button
+                  class="wc-btn small bg-sub-btn"
+                  @click="openOutputFolder"
+                  title="快捷打开 resources/output 目录"
+                >
+                  📁 output
+                </button>
+              </div>
+            </div>
+            <!-- 背景超分设置精致卡片 -->
+            <div v-if="bgStyle === 'image' && selectedBgImage" class="bg-upscale-card">
+              <div class="bg-upscale-card-head">
+                <span class="bg-upscale-badge">✨ AI 背景超分</span>
+                <div class="head-actions">
+                  <span v-if="selectedBgIsCustom" class="bg-scale-tag custom-tag" title="来自自定义 / 扩图背景库">自定义</span>
+                  <span v-if="selectedBgUpscaleTag" class="bg-scale-tag">{{ selectedBgUpscaleTag }}</span>
+                  <button
+                    class="bg-adv-toggle-btn"
+                    :class="{ on: showUpscaleAdv }"
+                    @click="showUpscaleAdv = !showUpscaleAdv"
+                    title="展开/收起高级超分参数（降噪、TTA增强、超采样）"
+                  >
+                    ⚙️ 参数
+                  </button>
+                </div>
+              </div>
+              <div class="bg-upscale-inputs">
+                <div class="upscale-select-row">
+                  <n-select
+                    v-model:value="upscaleAlgo"
+                    :options="upscaleAlgoOptions"
+                    size="small"
+                    style="flex: 1; min-width: 0;"
+                    title="选择 AI 超分引擎"
+                  />
+                  <n-select
+                    v-model:value="upscaleScale"
+                    :options="[
+                      { label: '2x 放大', value: 2 },
+                      { label: '4x 超清', value: 4 }
+                    ]"
+                    size="small"
+                    style="width: 86px; flex-shrink: 0;"
+                    title="选择放大倍率"
+                  />
+                </div>
+
+                <!-- 高级自定义参数折叠区 -->
+                <div v-if="showUpscaleAdv" class="upscale-adv-drawer">
+                  <div class="adv-param-item">
+                    <span class="adv-label">降噪级别</span>
+                    <n-select
+                      v-model:value="upscaleDenoise"
+                      :options="denoiseOptions"
+                      size="tiny"
+                      style="flex: 1"
+                    />
+                  </div>
+                  <div class="adv-param-item adv-switch-item">
+                    <span class="adv-label" title="8个旋转方向采样取平均值，画面杂讯更少但耗时增加约 2~3 倍">TTA 多角度采样</span>
+                    <n-switch v-model:value="upscaleTta" size="small" />
+                  </div>
+                  <div v-if="upscaleScale === 2" class="adv-param-item adv-switch-item">
+                    <span class="adv-label" title="先以 4x 极清渲染再高质量重采样回 2x，纹理比直接 2x 更致密">4x$\rightarrow$2x 超采样</span>
+                    <n-switch v-model:value="upscaleDownsample" size="small" />
+                  </div>
+                </div>
+
+                <button
+                  class="wc-btn gradient block bg-upscale-submit-btn"
+                  :disabled="upscalingBg || !selectedBgImage"
+                  @click="doUpscaleCurrentBg(upscaleScale, upscaleAlgo)"
+                  title="使用所选 AI 引擎对当前背景执行超分高清化"
+                >
+                  {{ upscalingBg ? '正在深度计算…' : '⚡ 生成超分背景' }}
+                </button>
+              </div>
             </div>
           </div>
           <div class="panel-field">
@@ -283,60 +413,132 @@
               <button class="wc-btn anim-nav-btn" @click="stepAnim(1)">→</button>
             </div>
           </div>
+          <!-- 多预设：把当前「动画+背景+构图」存为预设，导出后 WE 里下拉切换 -->
+          <div v-if="currentSkin && currentSkin.type !== 'static'" class="panel-field">
+            <label title="每个预设保存一套动画+背景+构图；导出的壁纸在 Wallpaper Engine 属性面板用「预设」下拉切换（如 loop 1 / loop 2 各一套构图）">
+              壁纸预设
+              <span class="bar-dim">（WE 里可切换）</span>
+            </label>
+            <button class="wc-btn preset-add-btn" title="把当前动画、背景与全部构图参数保存为一个预设" @click="addWpPreset">
+              ＋ 保存当前为预设
+            </button>
+            <div v-if="wpPresets.length" class="preset-list">
+              <div v-for="(p, i) in wpPresets" :key="i" class="preset-item">
+                <input
+                  v-if="presetEditing === i"
+                  v-model="presetEditName"
+                  class="preset-name-input"
+                  maxlength="24"
+                  @keyup.enter="commitPresetRename"
+                  @keyup.esc="cancelPresetRename"
+                  @blur="commitPresetRename"
+                />
+                <span v-else class="preset-name" :title="presetLabel(p)" @dblclick="startPresetRename(i)">
+                  {{ p.name }}
+                </span>
+                <button v-if="presetEditing !== i" class="wc-btn preset-act" title="重命名该预设" @click="startPresetRename(i)">✎</button>
+                <button class="wc-btn preset-act" title="在预览中应用该预设" @click="applyWpPreset(p)">预览</button>
+                <button class="wc-btn preset-act" title="删除该预设" @click="removeWpPreset(i)">✕</button>
+              </div>
+            </div>
+            <p v-if="wpPresets.length" class="bar-dim preset-hint">导出时将生成「预设」下拉：首个预设为初始状态</p>
+          </div>
         </div>
 
         <div class="panel-card">
           <div class="panel-title">导出</div>
           <template v-if="currentSkin">
-            <div class="panel-field" v-if="currentSkin.type !== 'static'">
-              <label>壁纸类型</label>
-              <n-select
-                value="spine"
-                :options="[{ label: 'Spine 动态壁纸', value: 'spine' }]"
-                size="small"
-                disabled
-              />
-            </div>
-            <div class="panel-field">
-              <label>水平偏移（占画布宽 %）</label>
-              <div class="offset-row">
-                <n-slider v-model:value="offsetX" :min="-100" :max="100" :step="1" />
-                <span class="bar-value" :class="{ zero: offsetX === 0 }">{{ offsetX > 0 ? '+' : '' }}{{ offsetX }}</span>
+            <!-- 互动控制面板可用（Spine 皮肤）：只保留人物/背景两组详细调节，
+                 整体偏移/对齐方式/壁纸类型由画布拖拽模式与默认值接管，不再显示 -->
+            <template v-if="currentSkin.type !== 'static'">
+              <div class="panel-group">
+                <div class="panel-group-title">人物调节</div>
+                <div class="panel-field">
+                  <label title="只移动角色骨架，背景保持不动">位置 · 水平</label>
+                  <div class="offset-row">
+                    <n-slider v-model:value="charOffsetX" :min="-100" :max="100" :step="1" />
+                    <span class="bar-value" :class="{ zero: charOffsetX === 0 }">{{ charOffsetX > 0 ? '+' : '' }}{{ charOffsetX }}</span>
+                  </div>
+                </div>
+                <div class="panel-field">
+                  <label>位置 · 垂直</label>
+                  <div class="offset-row">
+                    <n-slider v-model:value="charOffsetY" :min="-100" :max="100" :step="1" />
+                    <span class="bar-value" :class="{ zero: charOffsetY === 0 }">{{ charOffsetY > 0 ? '+' : '' }}{{ charOffsetY }}</span>
+                  </div>
+                </div>
+                <div class="panel-field">
+                  <label>缩放 <span class="bar-dim">{{ scale }}%</span></label>
+                  <n-slider v-model:value="scale" :min="20" :max="300" :step="5" />
+                </div>
+                <div class="panel-field">
+                  <label title="旋转人物（背景不动），正数=顺时针；取景框随旋转自动外扩，导出壁纸保持此角度">旋转 <span class="bar-dim">{{ rotation }}°</span></label>
+                  <div class="offset-row">
+                    <n-slider v-model:value="rotation" :min="-180" :max="180" :step="1" />
+                    <button class="wc-btn reset-bgscale" @click="rotation = 0" title="重置旋转角度">重置</button>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="panel-field">
-              <label>垂直偏移（占画布高 %）</label>
-              <div class="offset-row">
-                <n-slider v-model:value="offsetY" :min="-100" :max="100" :step="1" />
-                <span class="bar-value" :class="{ zero: offsetY === 0 }">{{ offsetY > 0 ? '+' : '' }}{{ offsetY }}</span>
+              <div class="panel-group">
+                <div class="panel-group-title">背景调节</div>
+                <div class="panel-field">
+                  <label title="独立调节背景图大小（100 = 默认铺满画布视口）">缩放 <span class="bar-dim">{{ bgScale }}%</span></label>
+                  <div class="offset-row">
+                    <n-slider v-model:value="bgScale" :min="30" :max="300" :step="5" />
+                    <button class="wc-btn reset-bgscale" @click="bgScale = 100" title="重置背景缩放">重置</button>
+                  </div>
+                </div>
+                <div class="panel-field">
+                  <label title="只移动背景图，人物保持不动">位置 · 水平</label>
+                  <div class="offset-row">
+                    <n-slider v-model:value="bgOffsetX" :min="-100" :max="100" :step="1" />
+                    <span class="bar-value" :class="{ zero: bgOffsetX === 0 }">{{ bgOffsetX > 0 ? '+' : '' }}{{ bgOffsetX }}</span>
+                  </div>
+                </div>
+                <div class="panel-field">
+                  <label>位置 · 垂直</label>
+                  <div class="offset-row">
+                    <n-slider v-model:value="bgOffsetY" :min="-100" :max="100" :step="1" />
+                    <span class="bar-value" :class="{ zero: bgOffsetY === 0 }">{{ bgOffsetY > 0 ? '+' : '' }}{{ bgOffsetY }}</span>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div class="panel-field">
-              <label>缩放 <span class="bar-dim">{{ scale }}%</span></label>
-              <n-slider v-model:value="scale" :min="20" :max="300" :step="5" />
-            </div>
-            <div class="panel-field">
-              <label title="独立调节背景图大小（100 = 默认铺满取景框）">背景缩放 <span class="bar-dim">{{ bgScale }}%</span></label>
-              <div class="offset-row">
-                <n-slider v-model:value="bgScale" :min="30" :max="300" :step="5" />
-                <button class="wc-btn reset-bgscale" @click="bgScale = 100" title="重置背景缩放">重置</button>
+            </template>
+            <template v-else>
+              <div class="panel-field">
+                <label>水平偏移（占画布宽 %）</label>
+                <div class="offset-row">
+                  <n-slider v-model:value="offsetX" :min="-100" :max="100" :step="1" />
+                  <span class="bar-value" :class="{ zero: offsetX === 0 }">{{ offsetX > 0 ? '+' : '' }}{{ offsetX }}</span>
+                </div>
               </div>
-            </div>
-            <div class="panel-field">
-              <label>对齐方式</label>
-              <n-select
-                v-model:value="alignment"
-                :options="[
-                  { label: '居中', value: 'center' },
-                  { label: '左上', value: 'left-top' },
-                  { label: '右上', value: 'right-top' },
-                  { label: '左下', value: 'left-bottom' },
-                  { label: '右下', value: 'right-bottom' },
-                ]"
-                size="small"
-                style="width: 100%"
-              />
-            </div>
+              <div class="panel-field">
+                <label>垂直偏移（占画布高 %）</label>
+                <div class="offset-row">
+                  <n-slider v-model:value="offsetY" :min="-100" :max="100" :step="1" />
+                  <span class="bar-value" :class="{ zero: offsetY === 0 }">{{ offsetY > 0 ? '+' : '' }}{{ offsetY }}</span>
+                </div>
+              </div>
+              <div class="panel-field">
+                <label>缩放 <span class="bar-dim">{{ scale }}%</span></label>
+                <n-slider v-model:value="scale" :min="20" :max="300" :step="5" />
+              </div>
+              <div class="panel-field">
+                <label>对齐方式</label>
+                <n-select
+                  v-model:value="alignment"
+                  :options="[
+                    { label: '居中', value: 'center' },
+                    { label: '左上', value: 'left-top' },
+                    { label: '右上', value: 'right-top' },
+                    { label: '左下', value: 'left-bottom' },
+                    { label: '右下', value: 'right-bottom' },
+                  ]"
+                  size="small"
+                  style="width: 100%"
+                />
+              </div>
+            </template>
             <div class="panel-field">
               <button class="wc-btn preset-import-btn" @click="openPresetImport">📥 导入 WE 预设 JSON</button>
             </div>
@@ -357,6 +559,135 @@
                 <n-button size="small" type="primary" @click="applyWePreset">应用</n-button>
               </div>
             </n-modal>
+
+            <!-- 选择背景 / 扩图结果小弹窗 -->
+            <n-modal
+              v-model:show="bgModalOpen"
+              preset="card"
+              title="选择背景 / 扩图结果"
+              style="width: 780px; max-width: 94vw; max-height: 88vh; display: flex; flex-direction: column;"
+              content-style="display: flex; flex-direction: column; overflow: hidden; padding: 12px 18px 18px;"
+            >
+              <!-- 顶部工具栏：搜索框、分类切换 -->
+              <div class="bg-modal-toolbar">
+                <div class="bg-modal-tabs">
+                  <button
+                    class="bg-tab-btn"
+                    :class="{ active: modalBgTab === 'custom' }"
+                    @click="modalBgTab = 'custom'"
+                  >
+                    自定义 / 扩图 ({{ customBgCount }})
+                  </button>
+                  <button
+                    class="bg-tab-btn"
+                    :class="{ active: modalBgTab === 'all' }"
+                    @click="modalBgTab = 'all'"
+                  >
+                    全部 ({{ allBackgrounds.length }})
+                  </button>
+                  <button
+                    class="bg-tab-btn"
+                    :class="{ active: modalBgTab === 'official' }"
+                    @click="modalBgTab = 'official'"
+                  >
+                    官方场景 ({{ officialBgCount }})
+                  </button>
+                </div>
+                <div class="bg-modal-search">
+                  <n-input
+                    v-model:value="modalBgSearch"
+                    size="small"
+                    placeholder="搜索背景文件名…"
+                    clearable
+                  />
+                </div>
+              </div>
+
+              <!-- 当前角色信息 & 快捷操作栏 -->
+              <div class="bg-modal-current-info">
+                <div class="current-role-badge">
+                  <span class="role-label">当前角色：</span>
+                  <span class="role-val">{{ selectedShip ? selectedShip.name : '' }} · {{ currentSkin ? currentSkin.name : '' }}</span>
+                  <span v-if="currentOfficialBgName" class="official-badge" :title="`官方背景文件：${currentOfficialBgName}`">
+                    官方原图: {{ currentOfficialBgName }}
+                  </span>
+                </div>
+                <div class="modal-quick-actions">
+                  <button
+                    class="wc-btn small bg-outpaint-folder"
+                    @click="restoreOfficialBackground(); bgModalOpen = false"
+                    title="重置回角色默认官方背景"
+                  >
+                    🔄 恢复官方背景
+                  </button>
+                  <button
+                    class="wc-btn small bg-outpaint-folder"
+                    @click="openInputFolder"
+                    title="打开 input 目录放扩图成果"
+                  >
+                    📁 input 文件夹
+                  </button>
+                  <button
+                    class="wc-btn small primary bg-outpaint-btn"
+                    :disabled="importingOutpaint"
+                    @click="doImportOutpaint"
+                    title="扫描 input 文件夹并刷新可用背景"
+                  >
+                    {{ importingOutpaint ? '导入中…' : '📥 立即导入' }}
+                  </button>
+                </div>
+              </div>
+
+              <!-- 背景卡片网格列表 -->
+              <div class="bg-modal-grid-scroll">
+                <div v-if="filteredModalBackgrounds.length === 0" class="bg-modal-empty">
+                  <div class="empty-icon">🖼</div>
+                  <div class="empty-text">未找到符合条件的背景图片</div>
+                  <div class="empty-hint">
+                    把扩图生成的图片（PNG/JPG 等）放进 input 后点「📥 立即导入」即可选用；删掉 input 里的图片就会从列表消失
+                  </div>
+                </div>
+                <div v-else class="bg-modal-grid">
+                  <div
+                    v-for="item in filteredModalBackgrounds"
+                    :key="item.filename"
+                    class="bg-modal-card"
+                    :class="{
+                      active: selectedBgImage === item.filename,
+                      matched: item.matchScore >= 70,
+                    }"
+                    @click="selectModalBg(item.filename)"
+                  >
+                    <div class="bg-card-thumb-box">
+                      <img
+                        :src="getBgThumbUrl(item)"
+                        :alt="item.name"
+                        class="bg-card-thumb"
+                        loading="lazy"
+                        @error="onModalThumbError($event, item)"
+                      />
+                      <div class="bg-card-badges">
+                        <span v-if="selectedBgImage === item.filename" class="badge-active">当前选用</span>
+                        <span v-else-if="item.matchScore >= 70" class="badge-match">✨ 匹配当前角色</span>
+                        <span v-if="item.source === 'custom'" class="badge-custom">自定义</span>
+                      </div>
+                      <button
+                        v-if="item.source === 'custom'"
+                        class="bg-card-del-btn"
+                        title="删除该背景（从 input 文件夹移除文件）"
+                        @click.stop="confirmDeleteBg(item.filename)"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div class="bg-card-info">
+                      <span class="bg-card-name" :title="item.filename">{{ item.name || item.filename }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </n-modal>
+
             <div class="export-actions">
               <button
                 v-if="currentSkin.asset"
@@ -455,12 +786,13 @@
 <script setup>
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { NButton, NInput, NModal, NSelect, NSlider, NAlert } from 'naive-ui'
+import { NButton, NInput, NModal, NSelect, NSlider, NAlert, NSwitch } from 'naive-ui'
 import { assetUrl, bridge, metadataUrl, sseUrl } from '../../bridge'
 import { playChime, warmAudio } from '../../utils/sound'
 import { voiceEnabled, toggleVoice } from '../../utils/voice'
 import SpinePreview from '../../components/SpinePreview.vue'
 import StaticPreview from '../../components/StaticPreview.vue'
+import '../../../../templates/wallpaper-layout.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -549,7 +881,7 @@ function showMsg(text) {
   }, 5000)
 }
 
-const filters = reactive({ search: '', type: 'all', faction: null, hull: null, theme: null })
+const filters = reactive({ search: '' })
 const bgStyle = ref('auto')
 const animation = ref('normal')
 const animOptions = ref([])
@@ -557,6 +889,15 @@ const scale = ref(100)
 const bgScale = ref(100)
 const offsetX = ref(0)
 const offsetY = ref(0)
+const charOffsetX = ref(0)
+const charOffsetY = ref(0)
+// 人物旋转（度，正=顺时针）：只转人物层，导出壁纸保持此角度
+const rotation = ref(0)
+// 背景图独立位移（%）：只移动背景图（与角色位置独立调节对应）
+const bgOffsetX = ref(0)
+const bgOffsetY = ref(0)
+// 画布拖拽/滚轮的调节对象：'stage'=整体画面（默认） | 'char'=人物 | 'bg'=背景
+const adjustTarget = ref('stage')
 const alignment = ref('center')
 // L2D 导出选项：开场动画（login 播一次再回 idle）。关闭后壁纸只播 idle，
 // 且 Wallpaper Engine 属性面板不再出现「开场动画」开关。
@@ -607,6 +948,10 @@ function applyWePreset() {
   if (ox !== null) { offsetX.value = Math.round(clamp(ox, -100, 100)); applied++ }
   const oy = num(data.offsety)
   if (oy !== null) { offsetY.value = Math.round(clamp(oy, -100, 100)); applied++ }
+  const cox = num(data.charoffsetx)
+  if (cox !== null) { charOffsetX.value = Math.round(clamp(cox, -100, 100)); applied++ }
+  const coy = num(data.charoffsety)
+  if (coy !== null) { charOffsetY.value = Math.round(clamp(coy, -100, 100)); applied++ }
   // alignment 兼容 WE 的两种格式：数字下标（旧）或字符串对齐名（新）
   if (data.alignment !== undefined && data.alignment !== null) {
     const a = data.alignment
@@ -625,7 +970,7 @@ function applyWePreset() {
     showMsg(`已应用 ${applied} 项 WE 预设`)
     presetImportOpen.value = false
   } else {
-    showMsg('未识别到可应用属性（scalectrl / offsetx / offsety / alignment / voice / playintro）')
+    showMsg('未识别到可应用属性（scalectrl / offsetx / offsety / charoffsetx / charoffsety / alignment / voice / playintro）')
   }
 }
 const interactionMode = ref(false)
@@ -653,30 +998,13 @@ const spineHasLogin = computed(() => {
 })
 
 const bgOptions = [
-  { label: '自动取色', value: 'auto' },
+  { label: '官方默认', value: 'auto' },
+  { label: '自定义背景', value: 'image' },
   { label: '纯色', value: 'solid' },
   { label: '莫奈渐变', value: 'monet' },
   { label: '毛玻璃', value: 'frost' },
   { label: '星空', value: 'star' },
 ]
-
-const typeOptions = [
-  { label: '全部', value: 'all' },
-  { label: 'Spine', value: 'spine' },
-  { label: '静态', value: 'static' },
-]
-
-const factionOptions = computed(() =>
-  [...new Set(ships.value.map((s) => s.faction).filter(Boolean))].sort().map((v) => ({ label: v, value: v })),
-)
-
-const hullOptions = computed(() =>
-  [...new Set(ships.value.map((s) => s.hull).filter(Boolean))].sort().map((v) => ({ label: v, value: v })),
-)
-
-const themeOptions = computed(() =>
-  [...new Set(ships.value.flatMap((s) => s.skins.map((k) => k.theme)).filter(Boolean))].sort().map((v) => ({ label: v, value: v })),
-)
 
 const totalSkins = computed(() => ships.value.reduce((n, s) => n + s.skins.length, 0))
 
@@ -692,27 +1020,19 @@ const filtered = computed(() => {
       !s.skins.some((k) => pyText(k.py).includes(kw)) &&
       !skinHit
     ) return false
-    const types = new Set(s.skins.map((k) => k.type))
-    if (filters.type !== 'all' && !types.has(filters.type)) return false
-    if (filters.faction && s.faction !== filters.faction) return false
-    if (filters.hull && s.hull !== filters.hull) return false
-    if (filters.theme && !s.skins.some((k) => k.theme === filters.theme)) return false
     return true
   })
 })
 
-// 按类型筛选时左侧改为皮肤级列表：直接展示具体的皮肤条目
-// 只看收藏时同样切到皮肤级列表，展示的是收藏的单个皮肤
-const skinMode = computed(() => filters.type !== 'all' || favOnly.value)
+// 只看收藏时切换到皮肤级列表，展示的是收藏的单个皮肤
+const skinMode = computed(() => favOnly.value)
 
 const filteredSkins = computed(() => {
   const out = []
   const kw = filters.search.trim().toLowerCase()
   for (const ship of filtered.value) {
     for (const skin of ship.skins) {
-      if (filters.type !== 'all' && skin.type !== filters.type) continue
       if (favOnly.value && !skinFavs.value.has(skin.key)) continue
-      if (filters.theme && skin.theme !== filters.theme) continue
       if (
         kw &&
         !ship.name.toLowerCase().includes(kw) &&
@@ -732,10 +1052,6 @@ const filteredSkins = computed(() => {
 function clearFilters() {
   searchInput.value = ''
   filters.search = ''
-  filters.type = 'all'
-  filters.faction = null
-  filters.hull = null
-  filters.theme = null
 }
 
 // 搜索框防抖：输入时不实时全量扫描数千条数据，停顿 250ms 后再过滤
@@ -748,22 +1064,633 @@ watch(searchInput, (v) => {
   }, 250)
 })
 
-watch(() => filters.type, () => clearSelection())
-
 const selectedShip = computed(() => ships.value.find((s) => s.id === selectedId.value) || null)
 const currentSkin = computed(() => selectedShip.value?.skins[currentSkinIndex.value] || null)
-// 切换皮肤时清空右侧面板台词，避免残留上一个皮肤的语音文本
-//（watch 注册时会立即求值一次 getter，必须放在 currentSkin 定义之后）
+
+function getSkinKey(skin) {
+  if (!skin) return ''
+  return skin.key || `${skin.ship || ''}_${skin.bundle || ''}_${skin.name || ''}`
+}
+
+const currentSkinKey = computed(() => getSkinKey(currentSkin.value))
+
+// 记录每个角色/皮肤独立的背景个性化配置，避免切换角色时背景相互污染
+const skinBgPrefs = new Map()
+
+function saveCurrentSkinBgPref() {
+  const k = currentSkinKey.value
+  if (!k) return
+  skinBgPrefs.set(k, {
+    bgStyle: bgStyle.value,
+    selectedBgImage: selectedBgImage.value,
+    solidColor: solidColor.value,
+    bgScale: bgScale.value,
+    bgOffsetX: bgOffsetX.value,
+    bgOffsetY: bgOffsetY.value,
+  })
+}
+
+// ===== 壁纸多预设（动画 + 背景 + 构图，导出后 WE 里「预设」下拉切换）=========
+// 每皮肤独立持久化（localStorage，键沿 azl_ 前缀惯例）；最多 8 个（与后端清洗上限一致）。
+const wpPresets = ref([])
+const WP_PRESET_MAX = 8
+
+const wpPresetKey = computed(() => 'azl_wp_presets_' + (currentSkinKey.value || ''))
+
+function loadWpPresets() {
+  presetEditing.value = -1
+  try {
+    const raw = localStorage.getItem(wpPresetKey.value)
+    const arr = raw ? JSON.parse(raw) : []
+    wpPresets.value = Array.isArray(arr) ? arr.slice(0, WP_PRESET_MAX) : []
+  } catch {
+    wpPresets.value = []
+  }
+}
+
+function persistWpPresets() {
+  try {
+    localStorage.setItem(wpPresetKey.value, JSON.stringify(wpPresets.value))
+  } catch { /* 存储满等异常静默 */ }
+}
+
+function addWpPreset() {
+  if (wpPresets.value.length >= WP_PRESET_MAX) {
+    showMsg(`预设最多 ${WP_PRESET_MAX} 个，请先删除不用的`)
+    return
+  }
+  const animLabel = animation.value || '待机'
+  const bgLabel = bgStyle.value === 'auto' ? '官方背景' : (bgStyle.value === 'image' && selectedBgImage.value ? '自定义图' : bgStyle.value)
+  let name = `${animLabel} · ${bgLabel}`
+  let n = 2
+  while (wpPresets.value.some((p) => p.name === name)) name = `${animLabel} · ${bgLabel} ${n++}`
+  wpPresets.value.push({
+    name,
+    animation: animation.value || '',
+    bg: bgStyle.value,
+    bgColor: bgStyle.value === 'solid' ? solidColor.value : '',
+    bgImage: bgStyle.value === 'image' ? selectedBgImage.value : '',
+    scale: scale.value,
+    offsetX: offsetX.value,
+    offsetY: offsetY.value,
+    charOffsetX: charOffsetX.value,
+    charOffsetY: charOffsetY.value,
+    rotation: rotation.value,
+    bgScale: bgScale.value,
+    bgOffsetX: bgOffsetX.value,
+    bgOffsetY: bgOffsetY.value,
+  })
+  persistWpPresets()
+  showMsg(`✓ 已保存预设「${name}」（导出后可在 WE 里切换）`)
+}
+
+function applyWpPreset(p) {
+  animation.value = p.animation || 'normal'
+  bgStyle.value = p.bg || 'auto'
+  selectedBgImage.value = p.bgImage || ''
+  if (p.bgColor) solidColor.value = p.bgColor
+  scale.value = p.scale ?? 100
+  offsetX.value = p.offsetX ?? 0
+  offsetY.value = p.offsetY ?? 0
+  charOffsetX.value = p.charOffsetX ?? 0
+  charOffsetY.value = p.charOffsetY ?? 0
+  rotation.value = p.rotation ?? 0
+  bgScale.value = p.bgScale ?? 100
+  bgOffsetX.value = p.bgOffsetX ?? 0
+  bgOffsetY.value = p.bgOffsetY ?? 0
+  saveCurrentSkinBgPref()
+  refreshBg()
+}
+
+function removeWpPreset(i) {
+  wpPresets.value.splice(i, 1)
+  presetEditing.value = -1
+  persistWpPresets()
+}
+
+// 预设重命名：✎ 或双击名字进入编辑，Enter/失焦提交（空名回退、重名自动加序号），Esc 取消
+const presetEditing = ref(-1)
+const presetEditName = ref('')
+
+// 预设悬浮说明：动画 + 背景模式（双击名字或 ✎ 改名）
+function presetLabel(p) {
+  const bg = p.bg === 'auto' ? '官方背景' : (p.bg === 'image' ? '自定义图' : p.bg)
+  return `${p.animation || '待机'} · ${bg}（双击改名）`
+}
+
+function startPresetRename(i) {
+  presetEditing.value = i
+  presetEditName.value = wpPresets.value[i]?.name || ''
+  nextTick(() => {
+    const el = document.querySelector('.preset-name-input')
+    if (el) { el.focus(); el.select() }
+  })
+}
+
+function commitPresetRename() {
+  const i = presetEditing.value
+  if (i < 0 || !wpPresets.value[i]) { presetEditing.value = -1; return }
+  const raw = (presetEditName.value || '').trim().slice(0, 24)
+  if (!raw) { presetEditing.value = -1; return } // 空名 = 放弃修改
+  let name = raw, n = 2
+  while (wpPresets.value.some((p, j) => j !== i && p.name === name)) name = `${raw} ${n++}`
+  wpPresets.value[i].name = name
+  presetEditing.value = -1
+  persistWpPresets()
+}
+
+function cancelPresetRename() {
+  presetEditing.value = -1
+}
+
+// 切换皮肤时清空右侧面板台词，并隔离恢复各皮肤独有的背景配置（未配置的皮肤默认回官方背景 auto）
 watch(
-  () => currentSkin.value && currentSkin.value.key,
-  () => { l2dSubtitle.value = '' },
+  currentSkinKey,
+  (newKey, oldKey) => {
+    l2dSubtitle.value = ''
+    loadWpPresets()
+    if (oldKey) {
+      skinBgPrefs.set(oldKey, {
+        bgStyle: bgStyle.value,
+        selectedBgImage: selectedBgImage.value,
+        solidColor: solidColor.value,
+        bgScale: bgScale.value,
+        bgOffsetX: bgOffsetX.value,
+        bgOffsetY: bgOffsetY.value,
+      })
+    }
+    if (newKey) {
+      if (skinBgPrefs.has(newKey)) {
+        const saved = skinBgPrefs.get(newKey)
+        bgStyle.value = saved.bgStyle || 'auto'
+        selectedBgImage.value = saved.selectedBgImage || ''
+        if (saved.solidColor) solidColor.value = saved.solidColor
+        if (typeof saved.bgScale === 'number') bgScale.value = saved.bgScale
+        if (typeof saved.bgOffsetX === 'number') bgOffsetX.value = saved.bgOffsetX
+        if (typeof saved.bgOffsetY === 'number') bgOffsetY.value = saved.bgOffsetY
+      } else {
+        bgStyle.value = 'auto'
+        selectedBgImage.value = ''
+        solidColor.value = ''
+        bgScale.value = 100
+        bgOffsetX.value = 0
+        bgOffsetY.value = 0
+      }
+    }
+  },
 )
 
 const bgCss = ref('')
 const solidColor = ref('')
-const autoBgStyle = computed(() =>
-  bgCss.value ? { background: bgCss.value } : {},
-)
+const selectedBgImage = ref('') // 当前选中的背景文件名（自定义/超分/指定）
+const allBackgrounds = ref([])
+const recommendedBgs = ref([])
+
+// 背景选择弹窗状态与过滤
+const modalBgTab = ref('custom') // 'custom' | 'all' | 'official'
+const modalBgSearch = ref('')
+const bgModalOpen = ref(false)
+
+function openBgModal() {
+  loadBackgrounds()
+  bgModalOpen.value = true
+}
+
+const customBgCount = computed(() => (allBackgrounds.value || []).filter((b) => b.source === 'custom').length)
+const officialBgCount = computed(() => (allBackgrounds.value || []).filter((b) => b.source === 'official').length)
+
+// 获取当前角色官方内置背景文件名（支持 Ultimate 多阶段背景及 layers 背景）
+function resolveOfficialBackground(skin = currentSkin.value) {
+  if (!skin || !skin.asset) return ''
+  const asset = skin.asset
+  const WL = window.WallpaperLayout
+  if (asset.bg_sets && WL && typeof WL.bgSetForAnim === 'function') {
+    const sets = asset.bg_sets
+    const maxSet = Object.keys(sets).reduce((m, k) => Math.max(m, parseInt(k, 10) || 0), 0) || 1
+    const wantSet = WL.bgSetForAnim(animation.value || 'idle', maxSet)
+    const setKey = String(wantSet)
+    const curImg = sets[setKey] || sets['1'] || Object.values(sets)[0]
+    if (curImg) return curImg
+  }
+  if (asset.layers) {
+    for (const l of asset.layers) {
+      if (l.bg) return l.bg
+    }
+  }
+  return ''
+}
+
+const currentOfficialBgName = computed(() => {
+  return resolveOfficialBackground()
+})
+
+// 解析当前要显示的背景（若在 image 模式且指定了图片则返回该图片；否则返回官方内置背景；兜底推荐图）
+function resolveCurrentBackground() {
+  if (bgStyle.value === 'image' && selectedBgImage.value) {
+    return selectedBgImage.value
+  }
+  const official = resolveOfficialBackground()
+  if (official) return official
+
+  if (recommendedBgs.value && recommendedBgs.value.length > 0) {
+    return recommendedBgs.value[0]
+  }
+  return ''
+}
+
+// 还原为当前角色的官方默认背景
+function restoreOfficialBackground() {
+  bgStyle.value = 'auto'
+  selectedBgImage.value = ''
+  bgScale.value = 100
+  bgOffsetX.value = 0
+  bgOffsetY.value = 0
+  saveCurrentSkinBgPref()
+  refreshBg()
+  showMsg('✓ 已还原为当前角色的官方默认背景')
+}
+
+// 选中并应用特定背景
+function applySelectedBackground(filename) {
+  if (!filename) return
+  selectedBgImage.value = filename
+  bgStyle.value = 'image'
+  saveCurrentSkinBgPref()
+  refreshBg()
+}
+
+// 针对当前角色为某个背景文件名计算匹配得分（0 ~ 100 分）
+function scoreBgMatch(filename, skin) {
+  if (!filename || !skin) return 0
+  const fn = String(filename).toLowerCase().trim()
+  const stem = fn.replace(/\.[^.]+$/, '')
+
+  // 1. 官方背景文件名精确或包含匹配（最高权重）
+  const officialBg = (resolveOfficialBackground(skin) || '').toLowerCase()
+  if (officialBg) {
+    const offStem = officialBg.replace(/\.[^.]+$/, '')
+    if (stem === offStem) return 100
+    if (stem.includes(offStem)) return 95
+    if (offStem.includes(stem) && stem.length >= 4) return 88
+  }
+
+  // 2. 皮肤 key / 角色编号（charXXXXXX）匹配
+  const skinKey = (skin.key || '').toLowerCase()
+  const bundle = (skin.bundle || '').toLowerCase()
+  const charMatches = [
+    ...(skinKey.match(/char\d+/gi) || []),
+    ...(bundle.match(/char\d+/gi) || []),
+  ]
+  for (const c of charMatches) {
+    const cl = c.toLowerCase()
+    if (stem.includes(cl)) return 90
+    const num = cl.replace('char', '')
+    if (num && num.length >= 4 && stem.includes(num)) return 85
+  }
+
+  // 3. 约会背景特征（illust_datingN / datingN）
+  const datingMatch = (skinKey + bundle).match(/dating(\d+)/i)
+  if (datingMatch) {
+    const dTag = `dating${datingMatch[1]}`
+    if (stem.includes(dTag)) return 88
+  }
+
+  // 4. 角色中文名 / 英文名 / 皮肤名匹配
+  const shipName = (selectedShip.value?.name || skin.ship || '').toLowerCase().trim()
+  if (shipName && shipName.length >= 2 && stem.includes(shipName)) return 75
+
+  const skinName = (skin.name || '').toLowerCase().trim()
+  if (skinName && skinName.length >= 2 && stem.includes(skinName)) return 70
+
+  return 0
+}
+
+const filteredModalBackgrounds = computed(() => {
+  let list = allBackgrounds.value || []
+  if (modalBgTab.value === 'custom') {
+    list = list.filter((b) => b.source === 'custom')
+  } else if (modalBgTab.value === 'official') {
+    list = list.filter((b) => b.source === 'official')
+  }
+  const q = modalBgSearch.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter(
+      (b) =>
+        (b.filename || '').toLowerCase().includes(q) ||
+        (b.name || '').toLowerCase().includes(q),
+    )
+  }
+  const skin = currentSkin.value
+  const scored = list.map((item) => ({
+    ...item,
+    matchScore: scoreBgMatch(item.filename, skin),
+  }))
+  return scored.sort((a, b) => {
+    const aIsCur = selectedBgImage.value === a.filename ? 1 : 0
+    const bIsCur = selectedBgImage.value === b.filename ? 1 : 0
+    if (aIsCur !== bIsCur) return bIsCur - aIsCur
+
+    if (a.matchScore !== b.matchScore) return b.matchScore - a.matchScore
+    if (a.source !== b.source) return a.source === 'custom' ? -1 : 1
+    return a.filename.localeCompare(b.filename)
+  })
+})
+
+function selectModalBg(filename) {
+  applySelectedBackground(filename)
+  bgModalOpen.value = false
+  showMsg(`✓ 已应用背景：${getBgDisplayName(filename)}`)
+}
+
+function onModalThumbError(e, item) {
+  if (e && e.target && item && item.filename) {
+    e.target.src = getBgImageUrl(item.filename)
+  }
+}
+
+async function confirmDeleteBg(filename) {
+  if (!window.confirm(`确定要删除自定义背景「${filename}」吗？`)) return
+  try {
+    const res = await bridge.deleteCustomBg(filename)
+    if (res && res.ok) {
+      showMsg(`✓ ${res.message || '已删除'}`)
+      if (selectedBgImage.value === filename) {
+        restoreOfficialBackground()
+      }
+      await loadBackgrounds()
+    } else {
+      showMsg(`✗ 删除失败：${(res && res.error) || '未知错误'}`)
+    }
+  } catch (e) {
+    showMsg(`✗ 删除异常：${e.message || e}`)
+  }
+}
+
+function getBgDisplayName(filename) {
+  if (!filename) return ''
+  const item = allBackgrounds.value.find((b) => b.filename === filename)
+  return item ? item.name : filename.replace(/\.[^.]+$/, '')
+}
+
+const selectedBgName = computed(() => {
+  const cur = resolveCurrentBackground()
+  if (!cur) return ''
+  return getBgDisplayName(cur)
+})
+
+function getBgThumbUrl(itemOrFilename) {
+  const fn = typeof itemOrFilename === 'object' ? itemOrFilename.filename : itemOrFilename
+  if (!fn) return ''
+  if (typeof itemOrFilename === 'object' && itemOrFilename.thumb) {
+    return assetUrl(itemOrFilename.thumb)
+  }
+  if (fn.includes('_preview.')) {
+    return assetUrl(`preview/${fn}`)
+  }
+  const baseStem = fn.replace(/\.[^.]+$/, '')
+  return assetUrl(`thumbnails/background/${baseStem}.webp`)
+}
+
+// 成品库目录名（对应后端 background_dirs().input）：放进去的图直接可用，删掉即消失。
+// 注意 source 标签仍叫 'custom'（徽标与删除按钮按它判断），但目录是 input——
+// 这里曾写死 'custom/'，切换成品库目录后会取图 404（选背景白屏）。
+const LIBRARY_DIR = 'input'
+
+function bgRelPath(itemOrFilename) {
+  const fn = typeof itemOrFilename === 'object' ? itemOrFilename.filename : itemOrFilename
+  if (!fn) return ''
+  const isCustom =
+    (typeof itemOrFilename === 'object' && itemOrFilename.source === 'custom') ||
+    allBackgrounds.value.some((b) => b.filename === fn && b.source === 'custom')
+  if (isCustom) return `${LIBRARY_DIR}/${fn}`
+  if (fn.includes('_preview.')) return `preview/${fn}`
+  return `background/${fn}`
+}
+
+function getBgImageUrl(filename) {
+  if (!filename) return ''
+  return assetUrl(bgRelPath(filename))
+}
+
+const selectedBgIsCustom = computed(() => {
+  const fn = selectedBgImage.value
+  if (!fn) return false
+  const hit = allBackgrounds.value.find((b) => b.filename === fn)
+  if (hit) return hit.source === 'custom'
+  const baseStem = fn.replace(/(_[a-zA-Z0-9]+_\d+x.*_preview|_\d+x)+$/i, '')
+  return allBackgrounds.value.some(
+    (b) => b.source === 'custom' && b.filename.replace(/\.[^.]+$/, '') === baseStem,
+  )
+})
+
+const selectedBgUpscaleTag = computed(() => {
+  const fn = selectedBgImage.value
+  if (!fn || !fn.includes('_preview.')) return ''
+  if (fn.includes('_4x')) return '已 4x'
+  if (fn.includes('_2x')) return '已 2x'
+  return '已超分'
+})
+
+// 当前是否隐藏骨架内置的默认背景：
+// 1. auto 模式：显示内置背景（若有）；
+// 2. image 模式：已选定背景图时隐藏内置背景（显示所选自定义扩图或场景图），避免两个背景重叠；
+// 3. solid / monet / frost / star 等模式：隐藏内置背景，露出所选纯色/渐变/星空底色。
+const hideDefaultBg = computed(() => {
+  if (bgStyle.value === 'auto') return false
+  if (bgStyle.value === 'image') return !!selectedBgImage.value
+  return true
+})
+
+async function loadBackgrounds() {
+  try {
+    const shipName = selectedShip.value ? selectedShip.value.name : ''
+    const res = await bridge.getBackgrounds({ ship: shipName })
+    if (res && res.ok) {
+      allBackgrounds.value = res.backgrounds || []
+      bgCategories.value = res.categories || []
+      recommendedBgs.value = res.recommendations || []
+      if (bgStyle.value === 'image' && recommendedBgs.value.length > 0 && !selectedBgImage.value) {
+        const hasBuiltin = currentSkin.value && currentSkin.value.asset && (currentSkin.value.asset.bg_sets || currentSkin.value.asset.layers?.some((l) => l.bg))
+        if (!hasBuiltin) {
+          selectedBgImage.value = recommendedBgs.value[0]
+        }
+      }
+    }
+  } catch (e) {
+    console.error('加载背景列表失败:', e)
+  }
+}
+
+async function openOutputFolder() {
+  const res = await bridge.openOutputDir()
+  if (!res || !res.ok) showMsg((res && res.error) || '打开 output 文件夹失败')
+}
+
+async function openInputFolder() {
+  const res = await bridge.openInputDir()
+  if (!res || !res.ok) showMsg((res && res.error) || '打开 input 文件夹失败')
+}
+
+async function doExportOutpaint() {
+  // 保证导出时优先解析当前角色的官方默认背景（若无官方背景才导出所选场景图或当前解析背景）
+  const official = resolveOfficialBackground()
+  const targetBg = (bgStyle.value === 'auto' ? official : (selectedBgImage.value || official)) || official || resolveCurrentBackground()
+  if (!targetBg) {
+    showMsg('未找到当前角色的可用背景图，无法导出')
+    return
+  }
+  outpaintExporting.value = true
+  try {
+    // 传皮肤 asset.dir：同角色姊妹皮肤可能存在同名不同图的背景（如 使徒 003403
+    // 的背景文件名就是 char003402_back1.png），后端必须按当前皮肤目录优先解析
+    const skinDir = (currentSkin.value && currentSkin.value.asset && currentSkin.value.asset.dir) || ''
+    const res = await bridge.exportBgForOutpaint(targetBg, skinDir)
+    if (res && res.ok) {
+      showMsg(`✓ ${res.message || '已导出到 output 文件夹'}`)
+    } else {
+      showMsg(`✗ 导出失败：${(res && res.error) || '未知错误'}`)
+    }
+  } catch (e) {
+    showMsg(`✗ 导出异常：${e.message || e}`)
+  } finally {
+    outpaintExporting.value = false
+  }
+}
+
+async function doImportOutpaint() {
+  importingOutpaint.value = true
+  try {
+    const res = await bridge.importOutpaintResults()
+    if (!(res && res.ok)) {
+      showMsg(`✗ 导入失败：${(res && res.error) || '未知错误'}`)
+      return
+    }
+    const imported = res.imported || []
+    const skipped = res.skipped || []
+    await loadBackgrounds()
+
+    if (imported.length === 0 && skipped.length === 0) {
+      showMsg(res.message || 'input 文件夹里还没有图片，请先放入扩图成品')
+      return
+    }
+
+    // 候选文件：优先本次新导入的；若本次全部已存在（skipped），则以 skipped 为候选
+    const candidates = imported.length > 0 ? imported : skipped
+    const skin = currentSkin.value
+
+    // 对候选文件打分
+    const scored = candidates.map((fn) => ({
+      filename: fn,
+      score: scoreBgMatch(fn, skin),
+    })).sort((a, b) => b.score - a.score)
+
+    const top = scored[0]
+
+    // 高置信度自动识别条件：
+    // 1. 只有一个候选文件且打分 >= 50
+    // 2. 最高分 >= 75 且明显领先于第二名（领先 >= 10 分）或仅一个候选
+    const isSingleCandidate = scored.length === 1
+    const isStrongMatch = top && top.score >= 75 && (isSingleCandidate || top.score >= (scored[1]?.score || 0) + 10)
+
+    if (top && (isStrongMatch || (isSingleCandidate && top.score >= 50))) {
+      applySelectedBackground(top.filename)
+      showMsg(`✓ 已自动识别并应用背景：${getBgDisplayName(top.filename)}`)
+    } else {
+      // 存在多张或命名无法高置信度识别对应哪个角色：打开选择背景小弹窗供用户点选
+      modalBgTab.value = 'custom'
+      bgModalOpen.value = true
+      if (imported.length > 0) {
+        showMsg(`已导入 ${imported.length} 张背景，请选择当前角色使用的背景`)
+      } else {
+        showMsg('input 中的图片已可用，请选择当前角色使用的背景')
+      }
+    }
+  } catch (e) {
+    showMsg(`✗ 导入异常：${e.message || e}`)
+  } finally {
+    importingOutpaint.value = false
+  }
+}
+
+const upscaleAlgo = ref('waifu2x')
+const upscaleScale = ref(2)
+const showUpscaleAdv = ref(false)
+const upscaleDenoise = ref(0)
+const upscaleTta = ref(false)
+const upscaleDownsample = ref(false)
+const upscalingBg = ref(false)
+const outpaintExporting = ref(false)
+const importingOutpaint = ref(false)
+
+const denoiseOptions = [
+  { label: '无降噪 (最锐利)', value: 0 },
+  { label: '轻度降噪', value: 1 },
+  { label: '中度降噪', value: 2 },
+  { label: '强力去噪', value: 3 },
+]
+
+const upscaleAlgoOptions = [
+  { label: 'Waifu2x (推荐，极佳兼容)', value: 'waifu2x' },
+  { label: 'Real-CUGAN (二次元专属)', value: 'realcugan' },
+  { label: 'Real-ESRGAN (精细渲染)', value: 'realesr' },
+]
+
+async function doUpscaleCurrentBg(scale = 2, algo = 'waifu2x') {
+  const targetBg = resolveCurrentBackground()
+  if (!targetBg) {
+    showMsg('未找到当前背景图')
+    return
+  }
+  upscalingBg.value = true
+  try {
+    const res = await bridge.upscaleBackground({
+      filename: targetBg,
+      scale,
+      algorithm: algo || upscaleAlgo.value,
+      denoise: upscaleDenoise.value,
+      tta: upscaleTta.value,
+      downsample: upscaleDownsample.value && scale === 2,
+    })
+    if (res && res.ok && res.filename) {
+      showMsg(res.message || `背景已成功放大 ${scale}x！`)
+      await loadBackgrounds()
+      selectedBgImage.value = res.filename
+      bgStyle.value = 'image'
+      refreshBg()
+    } else {
+      showMsg(`超分失败：${(res && res.error) || '未知错误'}`)
+    }
+  } catch (err) {
+    showMsg(`超分请求异常：${err.message || err}`)
+  } finally {
+    upscalingBg.value = false
+  }
+}
+
+const autoBgStyle = computed(() => {
+  if (bgStyle.value === 'image' && selectedBgImage.value) {
+    const url = getBgImageUrl(selectedBgImage.value)
+    const stage = stageRef.value
+    const sw = (stage && stage.clientWidth) || 1280
+    const sh = (stage && stage.clientHeight) || 720
+    const scaleFactor = (bgScale.value || 100) / 100
+    // 背景锚点 = 画面中心 + (整体偏移 + 背景独立偏移)：与人物取景锚点
+    //（spineCamera 的 offsetX/offsetY + drawBg 的 bgOffset）完全一致——
+    // 「画面」模式整体平移时背景跟着动、滚轮缩放时人物与背景绕同一锚点
+    // 等比缩放（否则人物绕自己的锚点缩、背景绕画面中心缩，越缩分离越大）。
+    // 符号：整体 offsetY 向下为正（画面跟随鼠标）；bgOffsetY 世界坐标向上
+    // 为正，屏幕 y 向下故取负——与 SpinePreview drawBg / 导出 bg_css 同式。
+    const pxX = (((bgOffsetX.value || 0) + (offsetX.value || 0)) / 100) * sw
+    const pxY = (((offsetY.value || 0) - (bgOffsetY.value || 0)) / 100) * sh
+    return {
+      backgroundImage: `url('${url}')`,
+      backgroundSize: `${scaleFactor * 100}% auto`,
+      backgroundPosition: `calc(50% + ${pxX}px) calc(50% + ${pxY}px)`,
+      backgroundRepeat: 'no-repeat',
+    }
+  }
+  return bgCss.value ? { background: bgCss.value } : {}
+})
 
 let bgSeq = 0
 async function refreshBg() {
@@ -780,15 +1707,39 @@ async function refreshBg() {
   bgCss.value = raw.replace(/^background:\s*/, '').replace(/;\s*$/, '')
 }
 
-watch(currentSkin, () => refreshBg(), { immediate: true })
+watch(currentSkin, () => {
+  loadBackgrounds()
+  refreshBg()
+}, { immediate: true })
 watch(currentSkin, () => {
   exportDone.value = false
   applyDone.value = false
   clearTimeout(exportTimer)
   clearTimeout(applyTimer)
 })
-watch(bgStyle, () => refreshBg())
-watch(solidColor, () => refreshBg())
+watch(bgStyle, (newVal) => {
+  if (newVal === 'image') {
+    if (!selectedBgImage.value && recommendedBgs.value.length > 0) {
+      const hasBuiltin = currentSkin.value && currentSkin.value.asset && (currentSkin.value.asset.bg_sets || currentSkin.value.asset.layers?.some((l) => l.bg))
+      if (!hasBuiltin) {
+        selectedBgImage.value = recommendedBgs.value[0]
+      }
+    }
+  }
+  saveCurrentSkinBgPref()
+  refreshBg()
+})
+watch(solidColor, () => {
+  saveCurrentSkinBgPref()
+  refreshBg()
+})
+watch(selectedBgImage, () => {
+  saveCurrentSkinBgPref()
+  refreshBg()
+})
+watch(bgScale, () => saveCurrentSkinBgPref())
+watch(bgOffsetX, () => saveCurrentSkinBgPref())
+watch(bgOffsetY, () => saveCurrentSkinBgPref())
 
 const WC = ['74,111,165', '180,120,140', '120,160,130', '201,168,76']
 
@@ -1149,7 +2100,11 @@ async function batchDownload() {
 function onSpineAnims(names) {
   animOptions.value = names.map((n) => ({ label: n, value: n }))
   if (!animation.value || !names.includes(animation.value)) {
-    animation.value = names.find((n) => /^idle$/i.test(n)) || names.find((n) => n === 'home') || names[0] || ''
+    const loop = names.find((n) => /^loop/i.test(n))
+    const idle = names.find((n) => /idle/i.test(n))
+    const normal = names.find((n) => n === 'normal')
+    const home = names.find((n) => n === 'home')
+    animation.value = loop || idle || normal || home || names[0] || ''
   }
 }
 
@@ -1218,18 +2173,33 @@ async function doExport() {
   exportDone.value = false
   exportResult.value = null
   try {
+    // 封面：截取当前预览画布（16:9 构图），后端直接写成 preview.jpg，
+    // 保证 WE 封面 = 预览所见；截不到则后端沿用兜底预览。
+    const cover = previewEl.value && typeof previewEl.value.capture === 'function'
+      ? previewEl.value.capture()
+      : null
     exportResult.value = await bridge.exportWallpaper(skin.ship, skin.bundle, skin.name, {
+      previewImage: cover || undefined,
       bg: bgStyle.value,
       bgColor: bgStyle.value === 'solid' ? solidColor.value || undefined : undefined,
+      bgImage: bgStyle.value === 'image' ? selectedBgImage.value || undefined : undefined,
+      hideDefaultBg: hideDefaultBg.value,
       scale: scale.value,
       bgScale: bgScale.value,
       offsetX: offsetX.value,
       offsetY: offsetY.value,
+      charOffsetX: charOffsetX.value,
+      charOffsetY: charOffsetY.value,
+      bgOffsetX: bgOffsetX.value,
+      bgOffsetY: bgOffsetY.value,
+      rotation: rotation.value,
       alignment: alignment.value,
       animation: animation.value,
       intro: introOn.value,
       voice: voiceEnabled.value,
+      interact: showHitAreas.value,
       showHitAreas: showHitAreas.value,
+      presets: wpPresets.value,
     })
   } catch (e) {
     exportResult.value = { ok: false, error: e.message || '导出失败' }
@@ -1250,18 +2220,31 @@ async function doApply() {
   applyDone.value = false
   applyResult.value = null
   try {
+    const cover2 = previewEl.value && typeof previewEl.value.capture === 'function'
+      ? previewEl.value.capture()
+      : null
     applyResult.value = await bridge.applyWallpaper(skin.ship, skin.bundle, skin.name, {
+      previewImage: cover2 || undefined,
       bg: bgStyle.value,
       bgColor: bgStyle.value === 'solid' ? solidColor.value || undefined : undefined,
+      bgImage: bgStyle.value === 'image' ? selectedBgImage.value || undefined : undefined,
+      hideDefaultBg: hideDefaultBg.value,
       scale: scale.value,
       bgScale: bgScale.value,
       offsetX: offsetX.value,
       offsetY: offsetY.value,
+      charOffsetX: charOffsetX.value,
+      charOffsetY: charOffsetY.value,
+      bgOffsetX: bgOffsetX.value,
+      bgOffsetY: bgOffsetY.value,
+      rotation: rotation.value,
       alignment: alignment.value,
       animation: animation.value,
       intro: introOn.value,
       voice: voiceEnabled.value,
+      interact: showHitAreas.value,
       showHitAreas: showHitAreas.value,
+      presets: wpPresets.value,
     })
   } catch (e) {
     applyResult.value = { ok: false, error: e.message || '导出并应用失败' }
@@ -1494,28 +2477,6 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-.filter-panel {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
-
-.filter-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.filter-field label {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.clear-filter-btn {
-  grid-column: span 2;
-  padding: 7px 0;
-}
 
 .rail-tool {
   flex: 1;
@@ -1839,6 +2800,72 @@ onBeforeUnmount(() => {
   margin-bottom: 8px;
 }
 
+/* 拖动/滚轮调节对象切换（画面/人物/背景）：与"拖拽/互动"同款滑块式分段视觉，
+   三段等分面板宽、按钮高度与"拖拽/互动"一致（32px），段间 6px 间距，
+   滑块宽度按 (100%-12px)/3 计算、位移按「滑块宽 + 6px」步进 */
+.adjust-row {
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 2px;
+}
+
+.adjust-seg {
+  position: relative;
+  display: flex;
+  width: 100%;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 12px;
+  padding: 3px;
+}
+
+.adjust-seg-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc((100% - 12px) / 3);
+  height: calc(100% - 6px);
+  border-radius: 10px;
+  background: linear-gradient(120deg, rgba(74, 111, 165, 0.9), rgba(133, 205, 202, 0.85));
+  box-shadow: 0 4px 14px rgba(74, 111, 165, 0.45);
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.adjust-seg.at-char .adjust-seg-thumb {
+  transform: translateX(calc(100% + 6px));
+}
+
+.adjust-seg.at-bg .adjust-seg-thumb {
+  transform: translateX(calc(200% + 12px));
+}
+
+.adjust-seg-item {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 0;
+  font-size: 12.5px;
+  letter-spacing: 2px;
+  font-family: var(--font-sans);
+  color: rgba(255, 255, 255, 0.78);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.25s ease;
+  border: none;
+  background: transparent;
+}
+
+.adjust-seg-item:hover {
+  color: #fff;
+}
+
+.adjust-seg-item.active {
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
 .l2d-seg-thumb {
   position: absolute;
   top: 3px;
@@ -2092,6 +3119,25 @@ onBeforeUnmount(() => {
   border-bottom: 1px dashed rgba(120, 120, 120, 0.22);
 }
 
+/* 导出面板内的调节分组（人物调节/背景调节）小标题 */
+.panel-group {
+  padding-top: 2px;
+}
+
+.panel-group + .panel-group {
+  margin-top: 14px;
+}
+
+.panel-group-title {
+  color: rgba(133, 205, 202, 0.9);
+  font-size: 11.5px;
+  letter-spacing: 2px;
+  margin-bottom: 8px;
+  padding-left: 8px;
+  border-left: 2px solid rgba(133, 205, 202, 0.55);
+  line-height: 1.2;
+}
+
 .export-actions .wc-btn + .wc-btn {
   margin-top: 14px;
 }
@@ -2149,6 +3195,62 @@ onBeforeUnmount(() => {
   font-size: 12px;
   min-width: 46px;
   text-align: center;
+}
+
+/* 壁纸多预设（动画+背景+构图，导出后 WE 里切换） */
+.preset-add-btn {
+  width: 100%;
+  margin-top: 6px;
+  border-style: dashed;
+}
+
+.preset-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.preset-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.preset-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.preset-name-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  outline: none;
+}
+
+.preset-act {
+  padding: 2px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.preset-hint {
+  margin: 6px 0 0;
+  font-size: 11px;
 }
 
 .panel-tip {
@@ -2451,6 +3553,511 @@ onBeforeUnmount(() => {
 
 /* 全屏模式 */
 .main-view.is-fullscreen .preview-zone {
+  width: 100%;
+}
+
+/* ================= 背景管理、超分与扩图工作流 ================= */
+.bg-select-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.bg-current-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 5px 8px;
+  background: rgba(74, 111, 165, 0.08);
+  border: 1px solid rgba(74, 111, 165, 0.2);
+  border-radius: 6px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.bg-current-name {
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.bg-cur-icon {
+  margin-right: 4px;
+}
+
+.bg-change-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border-radius: 4px;
+  background: rgba(74, 111, 165, 0.15);
+  border: 1px solid rgba(74, 111, 165, 0.35);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.bg-change-btn:hover {
+  background: rgba(74, 111, 165, 0.25);
+}
+
+.bg-workflow-card {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(120, 140, 170, 0.22);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.bg-workflow-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.bg-reset-link {
+  border: none;
+  background: transparent;
+  color: var(--blue, #4a6fa5);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  transition: opacity 0.2s;
+}
+
+.bg-reset-link:hover {
+  text-decoration: underline;
+}
+
+.bg-workflow-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  width: 100%;
+}
+
+.bg-wf-btn {
+  width: 100%;
+  padding: 5px 0;
+  font-size: 11px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.bg-workflow-sub {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 5px;
+  width: 100%;
+}
+
+.bg-sub-btn {
+  width: 100%;
+  padding: 4px 0;
+  font-size: 11px;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.035);
+  border: 1px solid rgba(120, 140, 170, 0.25);
+  color: var(--muted);
+  border-radius: 5px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.bg-sub-btn:hover {
+  background: rgba(74, 111, 165, 0.12);
+  color: var(--text);
+  border-color: rgba(74, 111, 165, 0.4);
+}
+.bg-upscale-card {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(74, 111, 165, 0.22);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.bg-upscale-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.bg-adv-toggle-btn {
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+.bg-adv-toggle-btn:hover {
+  color: var(--blue, #4a6fa5);
+  background: rgba(74, 111, 165, 0.1);
+}
+.bg-adv-toggle-btn.on {
+  color: var(--blue, #4a6fa5);
+  font-weight: 500;
+}
+.upscale-adv-drawer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.035);
+  border: 1px dashed rgba(120, 140, 170, 0.25);
+  border-radius: 6px;
+  margin-top: 2px;
+}
+.adv-param-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.adv-label {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.bg-upscale-badge {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue, #4a6fa5);
+}
+.bg-scale-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(34, 197, 94, 0.15);
+  color: #15803d;
+  font-weight: 500;
+}
+.bg-scale-tag.ml-2 {
+  margin-left: 6px;
+}
+.bg-scale-tag.custom-tag {
+  background: rgba(201, 168, 76, 0.22);
+  color: #8a6d1f;
+}
+.bg-upscale-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.upscale-select-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.upscale-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.bg-upscale-submit-btn {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(74, 111, 165, 0.2);
+}
+.bg-upscale-submit-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.text-btn {
+  border: none;
+  background: transparent;
+  color: var(--blue, #4a6fa5);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.text-btn:hover {
+  text-decoration: underline;
+}
+.bg-modal-upscale-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.open-bg-folder-btn {
+  padding: 4px 12px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(74, 111, 165, 0.16), rgba(133, 205, 202, 0.22));
+  border: 1px solid rgba(74, 111, 165, 0.4);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+.open-bg-folder-btn:hover {
+  background: linear-gradient(135deg, rgba(74, 111, 165, 0.28), rgba(133, 205, 202, 0.38));
+  box-shadow: 0 2px 8px rgba(74, 111, 165, 0.2);
+}
+
+/* 背景选择小弹窗 */
+.bg-modal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.bg-modal-tabs {
+  display: flex;
+  gap: 6px;
+}
+.bg-tab-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(120, 140, 170, 0.25);
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.bg-tab-btn:hover {
+  color: var(--text);
+  background: rgba(74, 111, 165, 0.08);
+}
+.bg-tab-btn.active {
+  background: linear-gradient(135deg, rgba(74, 111, 165, 0.2), rgba(133, 205, 202, 0.25));
+  border-color: rgba(74, 111, 165, 0.5);
+  color: var(--text);
+  font-weight: 600;
+}
+.bg-modal-search {
+  flex: 1;
+  min-width: 180px;
+  max-width: 280px;
+}
+.bg-modal-current-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(74, 111, 165, 0.06);
+  border: 1px solid rgba(74, 111, 165, 0.15);
+  border-radius: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.current-role-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.role-label {
+  color: var(--muted);
+}
+.role-val {
+  font-weight: 600;
+  color: var(--text);
+}
+.official-badge {
+  font-size: 11px;
+  background: rgba(201, 168, 76, 0.18);
+  color: #8a6d1f;
+  padding: 1px 6px;
+  border-radius: 4px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modal-quick-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.modal-quick-actions .wc-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.bg-modal-grid-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 240px;
+  max-height: 55vh;
+  padding-right: 4px;
+}
+.bg-modal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+.empty-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+  opacity: 0.6;
+}
+.empty-text {
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+.empty-hint {
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 400px;
+  line-height: 1.5;
+}
+.bg-modal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+}
+.bg-modal-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(120, 140, 170, 0.2);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.bg-modal-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(74, 111, 165, 0.6);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+.bg-modal-card.active {
+  border-color: var(--blue, #4a6fa5);
+  box-shadow: 0 0 0 2px rgba(74, 111, 165, 0.35);
+}
+.bg-modal-card.matched:not(.active) {
+  border-color: rgba(201, 168, 76, 0.65);
+  background: linear-gradient(180deg, rgba(201, 168, 76, 0.06), rgba(255, 255, 255, 0.7));
+}
+.bg-card-thumb-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: rgba(0, 0, 0, 0.05);
+  overflow: hidden;
+}
+.bg-card-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.bg-card-badges {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  pointer-events: none;
+}
+.badge-active {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #4a6fa5;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.badge-match {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #c9a84c;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.badge-custom {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+.bg-card-del-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: none;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s;
+}
+.bg-modal-card:hover .bg-card-del-btn {
+  opacity: 0.85;
+}
+.bg-card-del-btn:hover {
+  opacity: 1 !important;
+  background: #e53935;
+}
+.bg-card-info {
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+}
+.bg-card-name {
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   width: 100%;
 }
 </style>

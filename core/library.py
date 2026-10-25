@@ -76,6 +76,27 @@ class Library:
                         json.dumps(asset.get("layers", []), ensure_ascii=False),
                     ),
                 )
+            # 本地独有条目（提取即事实，如多章节约会皮分卷 illust_dating22_1/_2，
+            # skins.json 只有基础条目 illust_dating22）：不补录的话图鉴永远看不到。
+            known_paintings = {sk.get("painting") or "" for sk in skins}
+            known_keys = {(sk.get("ship"), sk.get("bundle")) for sk in skins}
+            for l in local_skins:
+                lp = l.get("painting") or ""
+                if lp in known_paintings or (l.get("ship"), l.get("bundle")) in known_keys:
+                    continue
+                asset = l.get("asset") or {}
+                skin_id = f"{l.get('ship')}|{l.get('bundle')}|{lp}"
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO skins(id,ship,name,bundle,type,status,asset_dir,asset_model,asset_layers) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        skin_id, l.get("ship"), l.get("name"), l.get("bundle", ""),
+                        l.get("type", "unknown"), "downloaded",
+                        asset.get("dir", ""),
+                        asset.get("model", ""),
+                        json.dumps(asset.get("layers", []), ensure_ascii=False),
+                    ),
+                )
 
     def list_ships(self) -> list[dict]:
         rows = self.conn.execute(

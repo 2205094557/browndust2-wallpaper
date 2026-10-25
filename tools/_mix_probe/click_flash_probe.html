@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<!--
+  BD2 点击闪帧复现探针（tools/_mix_probe/click_flash_probe.py 调用）。
+  用法: click_flash_probe.html?asset=<目录>&skel=x.skel&atlas=x.atlas
+        &clicks=<N>&mode=tail|mid&ms=<冻结毫秒>
+  - 与预览宿主同路径走 BD2 引擎：warm 家 idle → decide→playFull(cleanSwitch)
+    → 每步播完回 item.idle；clicks 次“完整点击”后，目标点击冻结在 +ms 帧。
+  - mode=mid: 目标点击打断上一段 40% 处（连点路径）；tail: 上一段自然播完再点。
+  - 输出：目标动画、逐帧(约 16/33/66/100/167ms)相对点击前帧的槽位附件变更表
+    （闪现=早期出现随后复原的槽），以及 +ms 静态帧供截图。
+-->
+<style>
+  html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; background: #050510; }
+  #canvas { display: block; width: 100vw; height: 100vh; }
+  #out { position: fixed; left: 6px; top: 6px; z-index: 20; background: rgba(0,0,0,.6);
+         color: #9fe8ff; font: 11px/1.5 ui-monospace, Consolas, monospace; padding: 4px 10px;
+         border-radius: 4px; white-space: pre-wrap; max-width: 98vw; max-height: 96vh; overflow: hidden; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<pre id="out">loading…</pre>
+<script src="spine-webgl-4.1.js"></script>
+<script src="bd2-interact.js"></script>
+<script>
+(function () {
+  'use strict';
+  var out = document.getElementById('out');
+  var canvas = document.getElementById('canvas');
+  var gl = null, renderer = null;
+  var skeleton = null, state = null, data = null;
+  var BD2_PREMULTIPLY_UPLOAD = true; // 铁律：BD2 直通 alpha，上传时浏览器预乘
+
+  function setOut(t) { out.textContent = t; }
+  var q = new URLSearchParams(location.search);
+  var ASSET = q.get('asset') || '';
+  var SKEL = q.get('skel') || '';
+  var ATLAS = q.get('atlas') || '';
+  var CLICKS = parseInt(q.get('clicks') || '0', 10);   // 目标点击前已完成多少次点击
+  var MODE = q.get('mode') || 'tail';                 // tail=自然播完 | mid=打断
+  var MS = parseFloat(q.get('ms') || '100');          // 目标点击后冻结时刻
+  var CLEAN = q.get('clean') === '1';                  // 1=隐藏诊断覆盖层（截图用）
+  if (CLEAN) out.style.display = 'none';
+  var BASE = 'assets/' + ASSET + '/';
+
+  function pickAnim(d) {
+    var names = d.animations.map(function (a) { return a.name; });
+    var idle = names.find(function (n) { return /idle/i.test(n); }) || names.find(function (n) { return n === 'normal'; });
+    return idle || names[0] || '';
+  }
+  function snap() {
+    var m = {};
+    for (var i = 0; i < skeleton.slots.length; i++) {
+      var s = skeleton.slots[i];
+      m[s.data.name] = s.attachment ? s.attachment.name : null;
+    }
+    return m;
+  }
+  function stepFrames(n) {
+    for (var i = 0; i < n; i++) { state.update(1 / 60); state.apply(skeleton); }
+    skeleton.updateWorldTransform();
+  }
+  // 点击一次（宿主语义：playFull cleanSwitch 单发），返回播放的动画名
+  function clickOnce(animName) {
+    var entry = state.setAnimation(0, animName, false);
+    if (entry) entry.mixDuration = 0.16;
+    state.update(0); state.apply(skeleton); skeleton.updateWorldTransform();
+    return entry;
+  }
+  function playFullClean(animName, loop) {
+    var entry = state.setAnimation(0, animName, loop);
+    if (entry) entry.mixDuration = 0.16;
+    state.update(0); state.apply(skeleton); skeleton.updateWorldTransform();
+  }
+  function curName() {
+    var e = state.getCurrent(0);
+    return e && e.animation ? e.animation.name : '';
+  }
+  function animDur(name) {
+    var a = data.animations.find(function (x) { return x.name === name; });
+    return a ? a.duration : 0;
+  }
+  // 把当前非循环动画播到自然结束（再回待机循环），与 onInteractComplete 一致
+  function playToEndThenIdle(idleAfter) {
+    var guard = Math.ceil(Math.max(animDur(curName()), 0.1) * 60) + 60;
+    var played = false;
+    while (guard-- > 0) {
+      var e = state.getCurrent(0);
+      if (!e) break;
+      if (!e.loop && e.animation && e.trackTime >= e.animation.duration - 1e-4) { played = true; break; }
+      state.update(1 / 60); state.apply(skeleton);
+    }
+    if (played || !state.getCurrent(0)) {
+      playFullClean(idleAfter, true);
+      stepFrames(30); // 待机 dwell
+    }
+  }
+
+  function isMaskSlotName(nm) {
+    nm = (nm + '').toLowerCase().trim();
+    if (nm === 'fr' || /^fr\s*\(\d+\)$/.test(nm)) return true;
+    if (nm.indexOf('bk') === 0) return true;
+    if (nm === 'black' || /^black\d/.test(nm)) return true;
+    if (nm === 'black_all' || nm === 'black_blur') return true;
+    if (nm.indexOf('black glow') === 0) return true;
+    if (nm.indexOf('hit_cut_bg') === 0) return true;
+    return false;
+  }
+  function isBgPanelSlot(slot) {
+    var nm = (((slot.data && slot.data.name) || '') + '').toLowerCase().trim();
+    return nm === 'bk' || nm === 'bg' || nm.indexOf('b_bg') === 0 || nm.indexOf('bg_') === 0 || nm.indexOf('bg-') === 0;
+  }
+  // 相机：按当前帧可见内容拟合（跳过节/遮罩判定同模板取景链）
+  function fitCamera() {
+    if (!renderer) return;
+    var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (var i = 0; i < skeleton.slots.length; i++) {
+      var slot = skeleton.slots[i], att = slot.getAttachment();
+      if (!att) continue;
+      if (slot.color && slot.color.a < 0.01) continue;
+      if ((att.name || '').toLowerCase().indexOf('kkkkk') === 0) continue;
+      if (isMaskSlotName(slot.data.name)) continue;
+      if (isBgPanelSlot(slot)) continue;
+      var isRegion = att instanceof spine.RegionAttachment;
+      var isMesh = att instanceof spine.MeshAttachment;
+      if (!isRegion && !isMesh) continue;
+      var len = isRegion ? 8 : att.worldVerticesLength;
+      if (!len) continue;
+      var verts = spine.Utils.newFloatArray(len);
+      if (isRegion) att.computeWorldVertices(slot, verts, 0, 2);
+      else att.computeWorldVertices(slot, 0, len, verts, 0, 2);
+      for (var j = 0; j < len; j += 2) {
+        if (verts[j] < minX) minX = verts[j];
+        if (verts[j] > maxX) maxX = verts[j];
+        if (verts[j + 1] < minY) minY = verts[j + 1];
+        if (verts[j + 1] > maxY) maxY = verts[j + 1];
+      }
+    }
+    if (!isFinite(minX)) return;
+    var cw = canvas.clientWidth || 1, ch = canvas.clientHeight || 1;
+    var bw = maxX - minX, bh = maxY - minY;
+    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    var zoom = Math.min(cw / bw, ch / bh) * 0.9;
+    renderer.camera.zoom = zoom;
+    renderer.camera.position.x = cx;
+    renderer.camera.position.y = cy;
+    renderer.camera.position.z = 0;
+  }
+  function drawFrame() {
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    renderer.begin();
+    renderer.drawSkeleton(skeleton, true);
+    renderer.end();
+  }
+
+  function parseAtlasPages(text) {
+    var m, re = /^([^\r\n]+\.png)\s*$/gm, pages = [];
+    while ((m = re.exec(text))) pages.push(m[1]);
+    return pages;
+  }
+  function loadImages(paths) {
+    return Promise.all(paths.map(function (p) {
+      return new Promise(function (resolve, reject) {
+        var img = new Image();
+        img.onload = function () { resolve(img); };
+        img.onerror = function () { reject(new Error('img fail ' + p)); };
+        img.src = BASE + p;
+      });
+    }));
+  }
+
+  function fmtDiff(prev, now) {
+    var lines = [];
+    for (var k in now) {
+      if (prev[k] !== now[k]) {
+        lines.push(k.replace(/^B_/, '') + ': ' + (prev[k] || '∅') + '→' + (now[k] || '∅'));
+      }
+    }
+    return lines;
+  }
+
+  async function boot() {
+    try {
+      var atlasText = await (await fetch(BASE + ATLAS)).text();
+      var pages = parseAtlasPages(atlasText);
+      var images = await loadImages(pages);
+      canvas.width = canvas.clientWidth; canvas.height = canvas.clientHeight;
+      gl = canvas.getContext('webgl', { alpha: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
+      if (!gl) throw new Error('WebGL not supported');
+      var texMap = {};
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, BD2_PREMULTIPLY_UPLOAD);
+      pages.forEach(function (p, i) { texMap[p] = new spine.GLTexture(gl, images[i]); });
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, BD2_PREMULTIPLY_UPLOAD);
+      var atlas = new spine.TextureAtlas(atlasText);
+      atlas.pages.forEach(function (page) { page.setTexture(texMap[page.name] || texMap[pages[0]]); });
+      var loader = new spine.AtlasAttachmentLoader(atlas);
+      var skelBuf = await (await fetch(BASE + SKEL)).arrayBuffer();
+      data = new spine.SkeletonBinary(loader).readSkeletonData(new Uint8Array(skelBuf));
+      skeleton = new spine.Skeleton(data);
+      skeleton.setToSetupPose();
+      skeleton.updateWorldTransform();
+      state = new spine.AnimationState(new spine.AnimationStateData(data));
+      renderer = new spine.SceneRenderer(canvas, gl, false);
+
+      if (!window.BD2Interact) throw new Error('no BD2Interact');
+      var profile = window.BD2Interact.detect(data.animations.map(function (a) { return a.name; }));
+      if (profile.style !== 'mix') { setOut('BD2-READY ' + ASSET + '\nstyle=' + profile.style + ' 非 mix 跳过'); document.title = 'BD2-READY'; return; }
+      window.BD2Interact.computeMotionTargets(profile, function () {
+        return { state: new state.constructor(state.data), skeleton: new skeleton.constructor(skeleton.data) };
+      });
+      window.BD2Interact.resetMix();
+
+      // warm：家 idle 稳态（对应预览 normal 待机后的首击前状态）
+      var pl = [];
+      { var guard = data.animations.length * 6 + 60;
+        while (guard-- > 0) {
+          var r = window.BD2Interact.decide(profile, [], null, { x: 0, y: 0 }, {});
+          if (!r) break;
+          pl.push(r);
+          if (pl.length > data.animations.length * 4) break;
+        } }
+      if (!pl.length) { setOut('BD2-READY ' + ASSET + '\n播放列表空'); document.title = 'BD2-READY'; return; }
+      var initialIdle = pickAnim(data) || pl[0].idle;
+      playFullClean(initialIdle, true);
+      stepFrames(240);
+      fitCamera();
+      drawFrame();
+
+      // 前面 clicks 次：完整点击（decide→cleanSwitch→播完→回该步 idle dwell）
+      var log = [];
+      for (var c = 0; c < CLICKS; c++) {
+        var item = pl[c % pl.length];
+        clickOnce(item.anim);
+        playToEndThenIdle(item.idle || initialIdle);
+        if (c === CLICKS - 1 && MODE === 'mid') {
+          // mid 模式：目标点击打断在上一段 40% 处 → 上面逻辑不符，直接特殊处理
+        }
+        log.push(item.anim);
+      }
+      // mid 模式重放：把最后一次“完整播完”换成“40% 处打断”
+      if (MODE === 'mid' && CLICKS > 0) {
+        playFullClean(initialIdle, true);
+        stepFrames(240);
+        fitCamera(); drawFrame();
+        for (var c2 = 0; c2 < CLICKS; c2++) {
+          var it2 = pl[c2 % pl.length];
+          if (c2 === CLICKS - 1) {
+            // 上一段播 40% 即被打断（目标点击马上来）
+            var eA = clickOnce(it2.anim);
+            var guard2 = Math.max(6, Math.ceil(Math.max(animDur(it2.anim), 0.2) * 0.4 * 60));
+            stepFrames(guard2);
+          } else {
+            clickOnce(it2.anim);
+            playToEndThenIdle(it2.idle || initialIdle);
+          }
+        }
+      }
+      var target = pl[CLICKS % pl.length];
+
+      // 记录点击前帧
+      var pre = snap();
+      var eT = clickOnce(target.anim);
+      var targetDur = animDur(target.anim);
+
+      // 逐帧采样：相对点击前帧的附件变更（闪现=出现又复原）
+      var diffs = [];
+      var offs = [1, 2, 4, 6, 10, 16]; // ~16/33/66/100/167ms
+      var arrived = 0;
+      for (var fi = 1; fi <= 16; fi++) {
+        if (state.getCurrent(0) && state.getCurrent(0).trackTime > 1e-3 && fi > arrived) arrived = fi;
+        state.update(1 / 60); state.apply(skeleton); skeleton.updateWorldTransform();
+        if (offs.indexOf(fi) >= 0) {
+          diffs.push({ f: fi, lines: fmtDiff(pre, snap()) });
+        }
+      }
+      var freezeFrames = Math.max(1, Math.round(MS / 16.67));
+      while (arrived < freezeFrames) { state.update(1 / 60); state.apply(skeleton); skeleton.updateWorldTransform(); arrived++; }
+      skeleton.updateWorldTransform();
+      fitCamera(); // 目标帧内容取景（与预览锁定初始相机略有差异，仅为看清内容）
+      drawFrame();
+
+      var text = 'BD2-READY ' + ASSET + ' clicks=' + CLICKS + ' mode=' + MODE + ' ms=' + MS + '\n' +
+        'clicked: ' + log.join(',') + '\n' +
+        'target: ' + target.anim + ' (dur ' + targetDur.toFixed(2) + 's) idleAfter=' + (target.idle || '') + ' preIdle=' + curName() + '\n';
+      diffs.forEach(function (d) {
+        text += 'F' + d.f + ' (' + Math.round(d.f * 16.67) + 'ms) changed=' + d.lines.length + '\n';
+        d.lines.slice(0, 80).forEach(function (l) { text += '  ' + l + '\n'; });
+      });
+      // 画面缩略图：直接从 GL 缓冲 readPixels（不依赖合成器），同一份 DOM 输出
+      try {
+        var cw3 = canvas.width, ch3 = canvas.height;
+        var px3 = new Uint8Array(cw3 * ch3 * 4);
+        gl.readPixels(0, 0, cw3, ch3, gl.RGBA, gl.UNSIGNED_BYTE, px3);
+        var tmp = document.createElement('canvas');
+        tmp.width = cw3; tmp.height = ch3;
+        tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(px3.buffer), cw3, ch3), 0, 0);
+        var tw = 640, th = Math.max(1, Math.round(ch3 * tw / cw3));
+        var c2 = document.createElement('canvas');
+        c2.width = tw; c2.height = th;
+        var cx = c2.getContext('2d');
+        cx.translate(0, th); cx.scale(1, -1); // GL 行序自下而上，翻正
+        cx.drawImage(tmp, 0, 0, tw, th);
+        text += 'IMG ' + c2.toDataURL('image/jpeg', 0.85) + '\n';
+      } catch (e2) { text += 'IMG none ' + e2.message + '\n'; }
+      if (CLEAN) { document.title = text.slice(0, 200); } else { setOut(text); }
+    } catch (e) {
+      setOut('BOOT-ERR ' + (e && e.message || e) + '\n' + (e && e.stack || ''));
+      document.title = 'BD2-ERR';
+    }
+  }
+  boot();
+})();
+</script>
+</body>
+</html>
